@@ -117,3 +117,23 @@ V11 改成：
 5. `/diagnostics/search?name=...` 會額外顯示官方消費快取數、HTML 店家索引數，以及最近一次公開搜尋錯誤，方便定位 Render 網路層問題。
 
 例如查詢 `月光餅`，預期會優先命中桃園觀光官方的「陳媽媽月光餅」；若官方資料源短暫不可用，才退回公開搜尋或 data.md 中直接包含「月光餅」的句子。
+
+## V12：修正外部名詞官方搜尋
+
+V11 的診斷顯示桃園觀光新版網站已不再接受先前猜測的 `/OpenData/Consume` 與 `/open-api/zh-tw/Consume` 路徑，Render 會收到 404，因此 `official_entity` 一直是 `null`。
+
+V12 改成不再猜 API 路徑：
+
+1. 先讀取桃園觀光官方「各區景點」頁 `https://travel.tycg.gov.tw/zh-tw/travel/listbyregion`。
+2. 從頁面中的官方 `/zh-tw/consume/detail/<id>` 連結建立店家／美食索引。
+3. 查到名稱後，再讀取該官方 Detail 頁取得介紹、地址、電話與營業資訊。
+4. 若官方目錄仍找不到，再使用官方站內搜尋與 Bing RSS / HTML、DuckDuckGo 作公開網路備援。
+5. `data.md`、對話記憶、照片、附近景點、行程、StoryMap 等既有功能維持不變。
+
+部署後可用：
+
+```text
+/diagnostics/search?name=月光餅
+```
+
+正常應看到 `app_version: 12.0.0`，且 `official_entity` 優先命中桃園觀光官方 Detail 頁。

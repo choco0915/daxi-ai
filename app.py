@@ -46,17 +46,12 @@ STORYMAP_URL = "https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8c
 TYCG_ATTRACTIONS_OPEN_DATA = "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAttractions"
 TYCG_CONSUME_DATASET_ID = "8dc035f1-0770-4522-8c98-96d98bb0530e"
 TYCG_CONSUME_DATASET_PAGE = f"https://opendata.tycg.gov.tw/datalist/{TYCG_CONSUME_DATASET_ID}"
-TYCG_CONSUME_OPEN_DATA_CANDIDATES = (
-    # 舊版桃園觀光 OpenData 端點
-    "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGConsume",
-    "https://travel.tycg.gov.tw/zh-tw/OpenData/Consume",
-    # 新版桃園觀光 Swagger 的 base URL 是 /open-api；不同部署期格式可能不同，
-    # loader 會同時接受 XML / JSON / CSV，因此可安全逐一嘗試。
-    "https://travel.tycg.gov.tw/open-api/zh-tw/Consume",
-    "https://travel.tycg.gov.tw/open-api/zh-tw/Consume?format=xml",
-    "https://travel.tycg.gov.tw/open-api/zh-tw/Consume?format=json",
-)
-TYCG_CONSUME_LIST_URL = "https://travel.tycg.gov.tw/zh-tw/Consume/List"
+# 不再猜測桃園觀光 API 的實際路徑。先從桃園資料開放平台 metadata
+# 探索真正 resource URL；若 metadata 暫時沒有暴露 resource，則改用官方
+# 「各區景點」頁建立大溪店家索引。這可避免網址改版後連續 404。
+TYCG_CONSUME_OPEN_DATA_CANDIDATES: tuple[str, ...] = ()
+TYCG_REGION_LIST_URL = "https://travel.tycg.gov.tw/zh-tw/travel/listbyregion"
+TYCG_CONSUME_LIST_URL = "https://travel.tycg.gov.tw/zh-tw/consume/list"
 TYCG_SEARCH_URL = "https://travel.tycg.gov.tw/zh-tw/search"
 TYCG_ALBUM_OPEN_DATA_CANDIDATES = (
     "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAlbum",
@@ -1281,7 +1276,7 @@ async def load_official_consumes() -> list[dict[str, Any]]:
 
     timeout = httpx.Timeout(14.0, connect=6.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/11.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/12.0)",
         "Accept": "application/json, application/xml, text/xml, text/csv, text/plain, */*",
         "Accept-Language": "zh-TW,zh;q=0.9",
     }
@@ -1316,6 +1311,9 @@ async def load_official_consumes() -> list[dict[str, Any]]:
         print(f"🍴 桃園觀光官方消費資料快取：{len(_official_consume_cache)} 筆")
     elif errors:
         _last_official_error = " | ".join(errors[-4:])
+    elif not records:
+        # 不把「沒有可下載 resource URL」視為致命錯誤；後續會走官方 HTML 索引。
+        _last_official_error = "桃園消費 Open Data resource URL 未從 metadata 解析到，已改走官方各區景點 HTML 索引"
     return _official_consume_cache
 
 
@@ -1361,57 +1359,63 @@ def _extract_consume_detail_links(html: str, base_url: str) -> list[dict[str, st
 
 
 async def _load_official_consume_catalog() -> list[dict[str, str]]:
-    """當 Open Data 暫時失效時，直接掃桃園觀光官方美食列表建立名稱索引。"""
+    """建立桃園觀光官方店家索引。
+
+    V12 不再把已失效的 /OpenData/Consume 或猜測的 /open-api/zh-tw/Consume
+    當主要來源。桃園觀光目前的「各區景點」頁本身就列出大溪區的「吃美味／購好物」
+    並連到 /zh-tw/consume/detail/<id>，因此直接用這個官方頁建立索引更穩定。
+    """
     global _official_consume_catalog_cache, _official_consume_catalog_cache_at, _last_official_error
     now = time.time()
     if _official_consume_catalog_cache and now - _official_consume_catalog_cache_at < OFFICIAL_CACHE_SECONDS:
         return _official_consume_catalog_cache
 
-    timeout = httpx.Timeout(12.0, connect=5.0)
+    timeout = httpx.Timeout(14.0, connect=6.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/11.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/12.0)",
         "Accept-Language": "zh-TW,zh;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     }
     catalog: list[dict[str, str]] = []
     errors: list[str] = []
+
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        # 第一優先：官方「各區景點」頁。此頁目前會直接列出大溪區的吃美味與購好物，
+        # 並含 consume/detail/<id> 連結，因此不需要猜 Swagger 實際 endpoint。
         try:
-            first = await client.get(TYCG_CONSUME_LIST_URL)
-            first.raise_for_status()
-            catalog.extend(_extract_consume_detail_links(first.text, str(first.url)))
-            page_numbers = [int(n) for n in re.findall(r'[?&]page=(\d+)', first.text, flags=re.I)]
-            max_page = min(max(page_numbers, default=18), 40)
+            region = await client.get(TYCG_REGION_LIST_URL)
+            region.raise_for_status()
+            catalog.extend(_extract_consume_detail_links(region.text, str(region.url)))
+            if catalog:
+                print(f"🍴 桃園觀光各區景點 HTML 店家索引：{len(catalog)} 筆")
         except Exception as exc:
-            errors.append(f"list page 1: {type(exc).__name__}: {sanitize_error(exc)}")
-            max_page = 0
+            errors.append(f"region-list: {type(exc).__name__}: {sanitize_error(exc)}")
 
-        semaphore = asyncio.Semaphore(6)
-
-        async def fetch_page(page_no: int) -> list[dict[str, str]]:
-            async with semaphore:
-                try:
-                    response = await client.get(TYCG_CONSUME_LIST_URL, params={"page": page_no})
-                    if response.status_code >= 400:
-                        return []
-                    return _extract_consume_detail_links(response.text, str(response.url))
-                except Exception as exc:
-                    errors.append(f"list page {page_no}: {type(exc).__name__}: {sanitize_error(exc)}")
-                    return []
-
-        if max_page >= 2:
-            pages = await asyncio.gather(*(fetch_page(page) for page in range(2, max_page + 1)))
-            for page_items in pages:
-                catalog.extend(page_items)
+        # 第二優先：若官方仍保留獨立 consume list 就補抓；404 不視為整體失敗。
+        if not catalog:
+            try:
+                first = await client.get(TYCG_CONSUME_LIST_URL)
+                if first.status_code < 400:
+                    catalog.extend(_extract_consume_detail_links(first.text, str(first.url)))
+            except Exception as exc:
+                errors.append(f"consume-list: {type(exc).__name__}: {sanitize_error(exc)}")
 
     unique: dict[str, dict[str, str]] = {}
     for item in catalog:
         url = item.get("url", "")
-        if url and url not in unique:
-            unique[url] = item
+        name = item.get("name", "").strip()
+        if not url or not name:
+            continue
+        # 導覽頁有可能同一店家同時出現在「吃美味」與「購好物」，用 URL 去重。
+        if url not in unique:
+            unique[url] = {"name": name, "url": url}
+
     _official_consume_catalog_cache = list(unique.values())
     _official_consume_catalog_cache_at = now
     if _official_consume_catalog_cache:
-        print(f"🍴 桃園觀光美食 HTML 索引：{len(_official_consume_catalog_cache)} 筆")
+        # HTML 索引成功時清掉前面 Open Data resource discovery 的非致命提示。
+        _last_official_error = ""
+        print(f"🍴 桃園觀光官方店家索引快取：{len(_official_consume_catalog_cache)} 筆")
     elif errors:
         _last_official_error = " | ".join(errors[-3:])
     return _official_consume_catalog_cache
@@ -1490,7 +1494,7 @@ async def _find_consume_from_official_catalog(query: str, focus_entities: list[s
         return None
 
     timeout = httpx.Timeout(12.0, connect=5.0)
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/11.0)", "Accept-Language": "zh-TW,zh;q=0.9"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/12.0)", "Accept-Language": "zh-TW,zh;q=0.9"}
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
             response = await client.get(best_item["url"])
@@ -1608,20 +1612,37 @@ def _extract_official_search_links(html: str, base_url: str, query: str) -> list
 
 
 async def _official_fulltext_search(client: httpx.AsyncClient, query: str, limit: int = 5) -> list[dict[str, str]]:
-    """直接利用桃園觀光站內全文檢索。不同版本前端的參數名稱可能不同，故逐一嘗試。"""
+    """桃園觀光官方站內搜尋備援。
+
+    V12 先掃官方「各區景點」總表，因為該頁目前會把各區景點、店家、住宿等
+    直接列出並連到 Detail 頁；這比猜測站內搜尋參數穩定。若仍找不到，再嘗試舊站內搜尋參數。
+    """
     clean = re.sub(r"[|｜].*$", "", query).strip()
     if not clean:
         return []
-    param_candidates = (
-        {"keyword": clean},
-        {"q": clean},
-        {"query": clean},
-        {"search": clean},
-        {"searchText": clean},
-        {"Keyword": clean},
-    )
+
     results: list[dict[str, str]] = []
     seen: set[str] = set()
+
+    # 1) 官方各區總表：可直接命中「陳媽媽月光餅」等 data.md 外名詞。
+    try:
+        region = await client.get(TYCG_REGION_LIST_URL)
+        if region.status_code < 400:
+            parsed = _extract_official_search_links(region.text, str(region.url), clean)
+            for item in parsed:
+                if item["url"] not in seen:
+                    seen.add(item["url"])
+                    results.append(item)
+                    if len(results) >= limit:
+                        return results
+    except Exception:
+        pass
+
+    # 2) 舊版站內搜尋路由仍保留兼容，但不把它視為唯一來源。
+    param_candidates = (
+        {"keyword": clean}, {"q": clean}, {"query": clean},
+        {"search": clean}, {"searchText": clean}, {"Keyword": clean},
+    )
     for params in param_candidates:
         try:
             response = await client.get(TYCG_SEARCH_URL, params=params)
@@ -1670,6 +1691,34 @@ def _extract_bing_results(html: str, limit: int = 5) -> list[dict[str, str]]:
         results.append({
             "type": "web",
             "title": _strip_html_text(link.group(2)) or host,
+            "url": url,
+            "domain": host,
+            "snippet": snippet,
+        })
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _extract_bing_rss_results(xml_text: str, limit: int = 5) -> list[dict[str, str]]:
+    """解析 Bing RSS 搜尋結果；比一般搜尋 HTML 結構更穩定。"""
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    try:
+        root = ET.fromstring(xml_text.encode("utf-8") if isinstance(xml_text, str) else xml_text)
+    except Exception:
+        return results
+    for item in root.findall(".//item"):
+        title = (item.findtext("title") or "").strip()
+        url = (item.findtext("link") or "").strip()
+        snippet = _strip_html_text(item.findtext("description") or "")
+        if not _is_allowed_public_result(url) or url in seen:
+            continue
+        seen.add(url)
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        results.append({
+            "type": "web",
+            "title": title or host,
             "url": url,
             "domain": host,
             "snippet": snippet,
@@ -1752,13 +1801,26 @@ async def public_web_search(query: str, limit: int = 5) -> list[dict[str, str]]:
         for search_query in search_queries:
             if len(results) >= limit:
                 break
-            # Bing fallback
+            # Bing RSS fallback：XML 結構比搜尋頁 HTML 穩定，先嘗試 RSS。
+            try:
+                response = await client.get(
+                    "https://www.bing.com/search",
+                    params={"q": search_query, "format": "rss", "setlang": "zh-hant"},
+                )
+                if response.status_code < 400:
+                    add(_extract_bing_rss_results(response.text, limit=limit-len(results)))
+            except Exception as exc:
+                errors.append(f"bing-rss: {type(exc).__name__}: {sanitize_error(exc)}")
+
+            if len(results) >= limit:
+                break
+            # Bing HTML fallback
             try:
                 response = await client.get("https://www.bing.com/search", params={"q": search_query, "setlang": "zh-hant"})
                 if response.status_code < 400:
                     add(_extract_bing_results(response.text, limit=limit-len(results)))
             except Exception as exc:
-                errors.append(f"bing: {type(exc).__name__}: {sanitize_error(exc)}")
+                errors.append(f"bing-html: {type(exc).__name__}: {sanitize_error(exc)}")
 
             if len(results) >= limit:
                 break
@@ -2650,7 +2712,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="11.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="12.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -2735,7 +2797,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "11.0.0",
+        "app_version": "12.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -2768,7 +2830,7 @@ async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) ->
     record = await find_official_entity(name, [name])
     public_results = [] if record else await public_web_search(name, limit=5)
     return {
-        "app_version": "11.0.0",
+        "app_version": "12.0.0",
         "query": name,
         "direct_kb_topic": has_direct_kb_topic(name, hits),
         "kb_titles": [hit.get("title") for hit in hits],
@@ -2801,7 +2863,7 @@ async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) ->
             matched_gallery = gallery_url
             break
     return {
-        "app_version": "11.0.0",
+        "app_version": "12.0.0",
         "query": name,
         "official_record": {
             "name": record.get("name"),
@@ -3038,7 +3100,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "11.0.0",
+            "app_version": "12.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),

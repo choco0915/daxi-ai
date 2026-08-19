@@ -346,6 +346,30 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("月光餅", answer)
         self.assertNotIn("木藝類", answer)
 
+    def test_region_page_consume_parser(self) -> None:
+        html = """
+        <section><h3>大溪區</h3>
+        <a href='/zh-tw/consume/detail/1947'>陳媽媽月光餅</a>
+        <a href='/zh-tw/travel/attraction/414'>大溪老街</a>
+        </section>
+        """
+        items = app._extract_consume_detail_links(html, app.TYCG_REGION_LIST_URL)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["name"], "陳媽媽月光餅")
+        self.assertTrue(items[0]["url"].endswith("/zh-tw/consume/detail/1947"))
+
+    def test_bing_rss_parser(self) -> None:
+        rss = """<?xml version='1.0' encoding='UTF-8'?>
+        <rss><channel><item>
+          <title>陳媽媽月光餅 - 桃園觀光導覽網</title>
+          <link>https://travel.tycg.gov.tw/zh-tw/consume/detail/1947</link>
+          <description>桃園市大溪區和平路87號，招牌菜月光餅。</description>
+        </item></channel></rss>"""
+        results = app._extract_bing_rss_results(rss)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["domain"], "travel.tycg.gov.tw")
+        self.assertIn("月光餅", results[0]["title"])
+
 
 
 
