@@ -33,6 +33,7 @@ INDEX_HTML = os.path.join(APP_DIR, "index.html")
 load_dotenv(os.path.join(APP_DIR, ".env"))
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6")
+OPENAI_FALLBACK_MODEL = os.getenv("OPENAI_FALLBACK_MODEL", "gpt-5.6-luna").strip()
 WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 TOP_K = 6
 MIN_RETRIEVAL_SCORE = 0.08
@@ -43,6 +44,15 @@ TYCG_ALBUM_OPEN_DATA_CANDIDATES = (
     "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAlbum",
     "https://travel.tycg.gov.tw/zh-tw/OpenData/Album",
 )
+# 桃園觀光的「景點頁」不一定直接帶相簿連結；對常用大溪景點保留官方相簿頁作為可靠 fallback。
+# 這些 URL 都是 travel.tycg.gov.tw 的官方頁面；圖片仍由後端即時解析，不把第三方圖片硬寫進專案。
+OFFICIAL_ALBUM_PAGE_MAP: dict[str, str] = {
+    "福仁宮": "https://travel.tycg.gov.tw/zh-tw/multimedia/album/3431",
+    "大溪老街": "https://travel.tycg.gov.tw/zh-tw/multimedia/album/71",
+    "大溪橋": "https://travel.tycg.gov.tw/zh-tw/multimedia/album/2767",
+    "武德殿": "https://travel.tycg.gov.tw/zh-tw/multimedia/album/62",
+    "大溪木藝生態博物館武德殿": "https://travel.tycg.gov.tw/zh-tw/multimedia/album/62",
+}
 OFFICIAL_CACHE_SECONDS = 1800
 
 # 官方來源優先。OpenAI web_search 的 allowed_domains 會包含該網域的子網域。
@@ -159,13 +169,15 @@ FOLLOWUP_MARKERS = (
     "它", "他", "那個", "這個", "那些", "這些", "其中", "深入", "詳細",
     "多介紹", "再介紹", "接著", "繼續", "第一個", "第二個", "第三個", "第四個",
     "照片", "圖片", "相片", "實景", "更多", "再多說", "介紹一下",
+    "附近", "周邊", "旁邊", "周遭", "還有什麼", "還有哪裡", "還能去哪", "附近有什麼",
 )
 ROUTE_MARKERS = ("行程", "路線", "安排", "串聯", "順遊", "順路", "半日", "一日", "兩天", "幾個景點", "一起玩")
+NEARBY_MARKERS = ("附近", "周邊", "旁邊", "周遭", "鄰近", "附近有什麼", "附近還有什麼", "還有哪裡", "還能去哪")
 WEB_MARKERS = (
     "網路", "上網", "查網路", "官網", "官方", "最新", "現在", "目前", "今天", "近期",
     "營業", "開放", "休館", "票價", "門票", "活動", "交通異動", "電話", "地址",
     "時間", "時刻", "深入", "詳細", "更多", "行程", "路線", "安排",
-    "照片", "圖片", "相片", "實景", "外觀",
+    "照片", "圖片", "相片", "實景", "外觀", "附近", "周邊", "鄰近",
 )
 
 DETAIL_MARKERS = ("詳細", "深入", "完整介紹", "仔細介紹", "多介紹", "進一步", "更多資訊")
@@ -227,6 +239,10 @@ _official_page_image_cache: dict[str, list[dict[str, str]]] = {}
 _official_album_cache: list[dict[str, Any]] = []
 _official_album_cache_at: float = 0.0
 _trusted_image_urls: set[str] = set()
+_last_openai_error: str = ""
+_last_openai_model_used: str = ""
+_last_official_error: str = ""
+_last_image_error: str = ""
 
 
 def normalize_text(text: str) -> str:
@@ -234,6 +250,13 @@ def normalize_text(text: str) -> str:
     text = re.sub(r"\s+", "", text)
     text = re.sub(r"[^0-9a-z\u4e00-\u9fff]", "", text)
     return text
+
+
+def sanitize_error(exc: Exception | str) -> str:
+    message = str(exc)
+    message = re.sub(r"sk-[A-Za-z0-9_-]+", "[REDACTED_KEY]", message)
+    message = re.sub(r"Bearer\s+[A-Za-z0-9._-]+", "Bearer [REDACTED]", message, flags=re.I)
+    return message[:500]
 
 
 def tokenize(text: str) -> list[str]:
@@ -419,6 +442,23 @@ def ordinal_index(question: str) -> int | None:
     return None
 
 
+def ordinal_indices(question: str) -> list[int]:
+    """支援「第二個跟第三個一起排」這種多選追問。"""
+    q = normalize_text(question)
+    mapping = [
+        (("第一個", "第1個"), 0),
+        (("第二個", "第2個"), 1),
+        (("第三個", "第3個"), 2),
+        (("第四個", "第4個"), 3),
+        (("第五個", "第5個"), 4),
+    ]
+    found: list[int] = []
+    for markers, index in mapping:
+        if any(normalize_text(marker) in q for marker in markers):
+            found.append(index)
+    return found
+
+
 def recent_recommendation_entities(history: list[HistoryTurn], last_recommendations: list[str]) -> list[str]:
     recommendations: list[str] = []
     for rec in last_recommendations:
@@ -477,7 +517,7 @@ def resolve_question(
     if explicit_titles:
         return question, explicit_titles
 
-    continuation_by_state = bool(active_topics) and (wants_detail(question) or wants_images(question))
+    continuation_by_state = bool(active_topics) and (wants_detail(question) or wants_images(question) or wants_nearby(question))
     if not is_followup_question(question) and not is_route_request(question) and not continuation_by_state:
         return question, []
 
@@ -486,10 +526,16 @@ def resolve_question(
     answer_entities = explicit_active or recent_answer_entities(history)
 
     idx = ordinal_index(question)
+    indices = ordinal_indices(question)
     q_norm = normalize_text(question)
     asks_recommendations = any(k in q_norm for k in ("推薦的", "剛剛推薦", "剛才推薦", "那些", "這些", "幾個"))
 
-    if idx is not None:
+    if is_route_request(question) and len(indices) >= 2:
+        pool = rec_entities or answer_entities
+        selected = [pool[i] for i in indices if i < len(pool)][:5]
+        if not selected:
+            return question, []
+    elif idx is not None:
         pool = rec_entities or answer_entities
         if idx >= len(pool):
             return question, []
@@ -682,52 +728,115 @@ def clean_markdown_for_local(text: str) -> str:
     return text.replace("**", "")
 
 
+def _record_title(record: dict[str, Any] | None, fallback: str = "景點") -> str:
+    if not record:
+        return fallback
+    return str(record.get("name") or fallback).strip() or fallback
+
+
+def _format_nearby_answer(
+    origin: dict[str, Any] | None,
+    nearby_records: list[dict[str, Any]],
+) -> str:
+    origin_name = _record_title(origin, "這個景點")
+    lines = [f"📍 **{origin_name}附近可以順遊這幾站**"]
+    for index, record in enumerate(nearby_records[:5], start=1):
+        name = str(record.get("name") or "附近景點")
+        distance = record.get("distance_km")
+        distance_text = f"，約 {distance:.1f} 公里" if isinstance(distance, (int, float)) else ""
+        summary = str(record.get("summary") or record.get("description") or "").strip()
+        if len(summary) > 85:
+            summary = summary[:85].rstrip() + "…"
+        detail = f" — {summary}" if summary else ""
+        lines.append(f"{index}. **{name}**{distance_text}{detail}")
+    lines.append("\n如果你願意，我可以直接把上面幾個景點排成 **2 小時、半日或一日** 的順遊路線。")
+    return "\n".join(lines)
+
+
+def _format_local_route_answer(records: list[dict[str, Any]], question: str) -> str:
+    if not records:
+        return ""
+    lines = ["🧭 **豆干弟幫你把剛剛的景點串成一條路線**"]
+    for index, record in enumerate(records, start=1):
+        name = str(record.get("name") or f"第 {index} 站")
+        address = str(record.get("address") or "").strip()
+        suffix = f"｜{address}" if address else ""
+        lines.append(f"{index}. **{name}**{suffix}")
+    if "半日" in question:
+        lines.append("\n這條可以當作半日散策的骨架；實際停留時間可依你想拍照、吃東西或看展的比例調整。")
+    else:
+        lines.append("\n這是依景點位置做的順遊順序；如果你告訴我可用時間，我可以再縮成更精準的版本。")
+    return "\n".join(lines)
+
+
 def local_rag_answer(
     question: str,
     hits: list[dict[str, Any]],
     official_record: dict[str, Any] | None = None,
     available_images: list[dict[str, str]] | None = None,
+    nearby_records: list[dict[str, Any]] | None = None,
+    route_records: list[dict[str, Any]] | None = None,
 ) -> str:
-    if not hits:
+    nearby_records = nearby_records or []
+    route_records = route_records or []
+
+    # 這兩類追問應優先吃「上一輪主題 + 官方資料」，不能先被 hits 是否存在擋掉。
+    if wants_nearby(question) and nearby_records:
+        return _format_nearby_answer(official_record, nearby_records)
+
+    if is_route_request(question) and route_records:
+        return _format_local_route_answer(route_records, question)
+
+    title = _record_title(official_record, hits[0]["title"] if hits else "景點")
+
+    if wants_images(question):
+        if available_images:
+            return (
+                f"📷 **{title}照片**\n\n"
+                "已找到官方來源圖片，我放在這則回答下方；點照片可以開啟來源頁面。"
+            )
         return (
-            f"😅 這題目前資料庫裡還沒有足夠內容可以可靠回答「{question}」。\n\n"
-            "你可以換個問法，或直接說「幫我查官方網站」，豆干弟再幫你延伸找資料。"
+            f"📷 **{title}照片**\n\n"
+            "這一輪仍沒有取得可安全顯示的官方圖片網址。豆干弟不會用不明來源圖片代替。\n\n"
+            "你可以點下方的官方來源頁；新版也會把這次圖片抓取失敗原因寫進診斷資訊，方便直接排查。"
+        )
+
+    # 即使 data.md 沒有該景點，只要官方資料有，就仍可延續上一輪做深入介紹。
+    if wants_detail(question) and official_record:
+        data_body = clean_markdown_for_local(hits[0]["text"]) if hits else ""
+        detail = str(official_record.get("description") or official_record.get("summary") or "").strip()
+        paragraphs: list[str] = [f"🏮 **{title}｜深入導覽**"]
+        if detail:
+            paragraphs.append(detail)
+        elif data_body:
+            paragraphs.append(data_body)
+
+        extras: list[str] = []
+        if official_record.get("address"):
+            extras.append(f"📍 **地址**：{official_record['address']}")
+        if official_record.get("open_time"):
+            extras.append(f"🕒 **開放資訊**：{official_record['open_time']}")
+        if official_record.get("tel"):
+            extras.append(f"☎️ **電話**：{official_record['tel']}")
+        if extras:
+            paragraphs.append("\n".join(extras))
+        return "\n\n".join(paragraphs).strip()
+
+    if not hits:
+        if official_record:
+            detail = str(official_record.get("summary") or official_record.get("description") or "").strip()
+            if detail:
+                return f"🏮 **{title}**\n\n{detail}"
+        return (
+            f"😅 這題目前資料庫與已取得的官方資料都還不足以可靠回答「{question}」。\n\n"
+            "你可以直接指定景點名稱，或說「查官方資料」，豆干弟再繼續找。"
         )
 
     if len(hits) == 1:
         hit = hits[0]
         body = clean_markdown_for_local(hit["text"])
-        if wants_images(question) and available_images:
-            return (
-                f"📷 **{official_record.get('name', hit['title'])}照片**\n\n"
-                "下面已放上桃園觀光導覽網官方資料提供的景點照片；點照片可開啟官方來源頁面。"
-            )
-        if wants_detail(question) and official_record:
-            detail = official_record.get("description") or official_record.get("summary") or ""
-            extras: list[str] = []
-            if official_record.get("address"):
-                extras.append(f"📍 **地址**：{official_record['address']}")
-            if official_record.get("open_time"):
-                extras.append(f"🕒 **開放資訊**：{official_record['open_time']}")
-            if official_record.get("tel"):
-                extras.append(f"☎️ **電話**：{official_record['tel']}")
-            return (
-                f"🏮 **{official_record.get('name', hit['title'])}｜深入導覽**\n\n"
-                f"{detail or body}\n\n"
-                + ("\n".join(extras) if extras else "")
-            ).strip()
         if wants_detail(question):
-            return (
-                f"🏮 **{hit['title']}**\n\n{body}\n\n"
-                "目前線上官方資料沒有成功載入，所以這一輪先只使用知識庫內能確認的內容；"
-                "等官方搜尋恢復後，豆干弟可以再補上更完整的建築、文化與參觀資訊。"
-            )
-        if wants_images(question):
-            return (
-                f"📷 **{hit['title']}照片**\n\n"
-                "目前官方圖片搜尋沒有成功載入，因此這一輪沒有可靠照片可以顯示；"
-                "豆干弟不會拿不明來源的圖片冒充官方照片。"
-            )
+            return f"🏮 **{hit['title']}**\n\n{body}"
         return f"🏮 **{hit['title']}**\n\n{body}"
 
     parts = ["🏮 **這題的重點可以這樣看**"]
@@ -737,7 +846,6 @@ def local_rag_answer(
             body = body[:360].rstrip() + "…"
         parts.append(f"**{hit['title']}**\n{body}")
     return "\n\n".join(parts)
-
 
 def _xml_child_text(element: ET.Element, *names: str) -> str:
     wanted = {name.lower() for name in names}
@@ -753,7 +861,7 @@ async def load_official_attractions() -> list[dict[str, Any]]:
 
     這條路徑不依賴 OpenAI，因此 API 額度不足時，詳細景點資料與照片仍可顯示。
     """
-    global _official_attractions_cache, _official_attractions_cache_at
+    global _official_attractions_cache, _official_attractions_cache_at, _last_official_error
     now = time.time()
     if _official_attractions_cache and now - _official_attractions_cache_at < OFFICIAL_CACHE_SECONDS:
         return _official_attractions_cache
@@ -765,7 +873,8 @@ async def load_official_attractions() -> list[dict[str, Any]]:
             response.raise_for_status()
             root = ET.fromstring(response.content)
     except Exception as exc:
-        print(f"⚠️ 桃園觀光官方 Open Data 讀取失敗：{exc}")
+        _last_official_error = f"{type(exc).__name__}: {sanitize_error(exc)}"
+        print(f"⚠️ 桃園觀光官方 Open Data 讀取失敗：{_last_official_error}")
         return _official_attractions_cache
 
     records: list[dict[str, Any]] = []
@@ -809,6 +918,7 @@ async def load_official_attractions() -> list[dict[str, Any]]:
             unique[key] = record
     _official_attractions_cache = list(unique.values())
     _official_attractions_cache_at = now
+    _last_official_error = ""
     print(f"🌐 桃園觀光官方 Open Data 載入：{len(_official_attractions_cache)} 筆景點")
     return _official_attractions_cache
 
@@ -845,6 +955,107 @@ async def find_official_attraction(query: str, focus_entities: list[str] | None 
     return best[1] if best[0] >= 60 else None
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        result = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    radius = 6371.0088
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlon / 2) ** 2
+    return 2 * radius * math.asin(math.sqrt(a))
+
+
+async def find_nearby_attractions(
+    origin: dict[str, Any] | None,
+    limit: int = 5,
+    max_distance_km: float = 3.0,
+) -> list[dict[str, Any]]:
+    """直接用桃園觀光官方景點座標找附近景點，不依賴 OpenAI。"""
+    if not origin:
+        return []
+    origin_lon = _safe_float(origin.get("px"))
+    origin_lat = _safe_float(origin.get("py"))
+    if origin_lon is None or origin_lat is None:
+        return []
+
+    origin_name = normalize_text(str(origin.get("name") or ""))
+    origin_id = str(origin.get("id") or "")
+    records = await load_official_attractions()
+    ranked: list[dict[str, Any]] = []
+    for record in records:
+        if origin_id and str(record.get("id") or "") == origin_id:
+            continue
+        if origin_name and normalize_text(str(record.get("name") or "")) == origin_name:
+            continue
+        lon = _safe_float(record.get("px"))
+        lat = _safe_float(record.get("py"))
+        if lon is None or lat is None:
+            continue
+        distance = _haversine_km(origin_lat, origin_lon, lat, lon)
+        if 0.03 <= distance <= max_distance_km:
+            item = dict(record)
+            item["distance_km"] = round(distance, 2)
+            ranked.append(item)
+
+    ranked.sort(key=lambda item: item.get("distance_km", 999.0))
+    return ranked[:limit]
+
+
+async def find_official_records_for_entities(entities: list[str]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entity in entities[:6]:
+        record = await find_official_attraction(entity, [entity])
+        if not record:
+            continue
+        key = str(record.get("id") or record.get("name") or "")
+        if key and key not in seen:
+            seen.add(key)
+            records.append(record)
+    return records
+
+
+def order_records_by_nearest(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """用簡單最近鄰方式排順遊順序；沒有座標的景點維持原順序放最後。"""
+    if len(records) <= 2:
+        return records[:]
+    with_coords: list[dict[str, Any]] = []
+    without_coords: list[dict[str, Any]] = []
+    for record in records:
+        if _safe_float(record.get("px")) is None or _safe_float(record.get("py")) is None:
+            without_coords.append(record)
+        else:
+            with_coords.append(record)
+    if not with_coords:
+        return records[:]
+
+    ordered = [with_coords.pop(0)]
+    while with_coords:
+        current = ordered[-1]
+        current_lon = _safe_float(current.get("px"))
+        current_lat = _safe_float(current.get("py"))
+        assert current_lon is not None and current_lat is not None
+        next_index = min(
+            range(len(with_coords)),
+            key=lambda idx: _haversine_km(
+                current_lat,
+                current_lon,
+                _safe_float(with_coords[idx].get("py")) or current_lat,
+                _safe_float(with_coords[idx].get("px")) or current_lon,
+            ),
+        )
+        ordered.append(with_coords.pop(next_index))
+    return [*ordered, *without_coords]
+
+
 def build_official_context(record: dict[str, Any] | None) -> str:
     if not record:
         return "（本輪未取得桃園觀光官方景點資料）"
@@ -858,6 +1069,19 @@ def build_official_context(record: dict[str, Any] | None) -> str:
         f"官方頁面：{record.get('source_url', '')}" if record.get("source_url") else "",
     ]
     return "\n".join(field for field in fields if field)
+
+
+def build_official_records_context(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return "（沒有額外官方景點資料）"
+    blocks: list[str] = []
+    for record in records[:6]:
+        block = build_official_context(record)
+        distance = record.get("distance_km")
+        if isinstance(distance, (int, float)):
+            block += f"\n與目前景點直線距離：約 {distance:.2f} 公里"
+        blocks.append(block)
+    return "\n\n---\n\n".join(blocks)
 
 
 def official_source_from_record(record: dict[str, Any] | None) -> dict[str, str] | None:
@@ -928,7 +1152,7 @@ async def load_official_albums() -> list[dict[str, Any]]:
         return _official_album_cache
 
     timeout = httpx.Timeout(12.0, connect=6.0)
-    headers = {"User-Agent": "Daxi-AI-Guide/6.0"}
+    headers = {"User-Agent": "Daxi-AI-Guide/7.0"}
     root: ET.Element | None = None
     used_url = ""
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -1001,8 +1225,68 @@ async def find_album_images(query: str, focus_entities: list[str] | None = None)
     return images
 
 
+def _extract_image_urls_from_html(html: str, base_url: str) -> list[str]:
+    """從桃園觀光頁面 HTML / lazy-load / 內嵌 JSON 中抽出圖片網址。"""
+    normalized_html = unescape(html or "")
+    normalized_html = normalized_html.replace("\\/", "/").replace("\\u002F", "/")
+    raw_candidates: list[str] = []
+
+    patterns = [
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        r'<img[^>]+(?:data-src|data-original|data-lazy-src|data-url|src)=["\']([^"\']+)',
+        r'<(?:source|img)[^>]+(?:data-srcset|srcset)=["\']([^"\']+)',
+        r'https?://[^\s"\'<>]+/image/\d+(?:/\d+x\d+)?[^\s"\'<>]*',
+        r'(?<![A-Za-z0-9])(/image/\d+(?:/\d+x\d+)?[^\s"\'<>]*)',
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, normalized_html, flags=re.I):
+            raw_candidates.append(match if isinstance(match, str) else str(match))
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_candidates:
+        raw = raw.strip().split(",")[0].split()[0].strip('"\'')
+        if not raw or raw.startswith("data:"):
+            continue
+        url = urljoin(base_url, raw)
+        lower = url.lower()
+        if any(bad in lower for bad in ("logo", "icon", "sprite", "favicon", "qrcode", "avatar")):
+            continue
+        if not _looks_like_image_url(url):
+            continue
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def _extract_album_links_from_html(html: str, base_url: str) -> list[str]:
+    normalized_html = unescape(html or "").replace("\\/", "/")
+    links: list[str] = []
+    seen: set[str] = set()
+    patterns = [
+        r'href=["\']([^"\']*/(?:zh-tw/)?multimedia/album/\d+[^"\']*)["\']',
+        r'(?<![A-Za-z0-9])(/zh-tw/multimedia/album/\d+)',
+        r'(?<![A-Za-z0-9])(/multimedia/album/\d+)',
+    ]
+    for pattern in patterns:
+        for raw in re.findall(pattern, normalized_html, flags=re.I):
+            url = urljoin(base_url, raw)
+            if url not in seen:
+                seen.add(url)
+                links.append(url)
+    return links[:3]
+
+
 async def scrape_official_page_images(record: dict[str, Any] | None) -> list[dict[str, str]]:
-    """直接從桃園觀光官方景點頁找 OG / img 圖片，作為相簿 API 的第二層備援。"""
+    global _last_image_error
+    """從桃園觀光景點頁與其官方相簿頁找圖片。
+
+    舊版只找 <img src> / og:image，桃園觀光站常把圖片藏在 lazy-load、srcset 或
+    內嵌 JSON 的 /image/<id>/<size> 中，因此會得到 0 張；新版把這些格式一起解析，
+    並在景點頁有相簿連結時再進相簿頁抓圖。
+    """
     if not record:
         return []
     source_url = str(record.get("source_url") or "").strip()
@@ -1011,53 +1295,65 @@ async def scrape_official_page_images(record: dict[str, Any] | None) -> list[dic
     if source_url in _official_page_image_cache:
         return _official_page_image_cache[source_url]
 
+    timeout = httpx.Timeout(14.0, connect=6.0)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/7.0; +https://travel.tycg.gov.tw/)",
+        "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
+        "Accept": "text/html,application/xhtml+xml",
+    }
+
     try:
-        timeout = httpx.Timeout(12.0, connect=6.0)
-        headers = {
-            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/6.0",
-            "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
-        }
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
             response = await client.get(source_url)
             response.raise_for_status()
             html = response.text
+
+            page_sets: list[tuple[str, str]] = [(source_url, html)]
+            album_urls = _extract_album_links_from_html(html, source_url)
+            record_name = str(record.get("name") or "").strip()
+            # 某些桃園觀光景點頁的 server-rendered HTML 不會直接列出相簿連結，
+            # 但官方相簿本身存在。已知大溪景點用官方相簿頁補一層，不依賴 OpenAI。
+            for key, known_album_url in OFFICIAL_ALBUM_PAGE_MAP.items():
+                if normalize_text(key) in normalize_text(record_name) or normalize_text(record_name) in normalize_text(key):
+                    if known_album_url not in album_urls:
+                        album_urls.append(known_album_url)
+            for album_url in album_urls[:4]:
+                try:
+                    album_response = await client.get(album_url)
+                    album_response.raise_for_status()
+                    page_sets.append((album_url, album_response.text))
+                except Exception as exc:
+                    _last_image_error = f"相簿頁：{type(exc).__name__}: {sanitize_error(exc)}"
+                    print(f"⚠️ 官方相簿頁讀取失敗：{album_url}｜{_last_image_error}")
     except Exception as exc:
-        print(f"⚠️ 官方景點頁圖片解析失敗：{exc}")
+        _last_image_error = f"景點頁：{type(exc).__name__}: {sanitize_error(exc)}"
+        print(f"⚠️ 官方景點頁圖片解析失敗：{_last_image_error}")
         _official_page_image_cache[source_url] = []
         return []
 
-    candidates: list[str] = []
-    patterns = [
-        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-        r'<img[^>]+(?:data-src|data-original|src)=["\']([^"\']+)',
-        r'<source[^>]+srcset=["\']([^"\']+)',
-    ]
-    for pattern in patterns:
-        for raw in re.findall(pattern, html, flags=re.I):
-            raw = unescape(raw).strip().split(",")[0].split()[0]
-            if raw.startswith("data:"):
-                continue
-            url = urljoin(source_url, raw)
-            lower = url.lower()
-            if any(bad in lower for bad in ("logo", "icon", "sprite", "favicon", "qrcode", "avatar")):
-                continue
-            if not _looks_like_image_url(url):
-                continue
-            if url not in candidates:
-                candidates.append(url)
-
     name = str(record.get("name") or "景點")
-    images = [
-        {
-            "image_url": url,
-            "thumbnail_url": url,
-            "source_url": source_url,
-            "caption": f"{name}｜桃園觀光導覽網官方頁面照片",
-        }
-        for url in candidates[:4]
-    ]
+    images: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for page_url, page_html in page_sets:
+        for image_url in _extract_image_urls_from_html(page_html, page_url):
+            if image_url in seen:
+                continue
+            seen.add(image_url)
+            images.append({
+                "image_url": image_url,
+                "thumbnail_url": image_url,
+                "source_url": page_url,
+                "caption": f"{name}｜桃園觀光導覽網官方照片",
+            })
+            if len(images) >= 4:
+                _official_page_image_cache[source_url] = images
+                return images
+
     _official_page_image_cache[source_url] = images
+    if images:
+        _last_image_error = ""
+    elif not _last_image_error:
+        _last_image_error = "官方頁面可讀取，但沒有解析到 /image/ 或 lazy-load 圖片網址"
     return images
 
 
@@ -1093,6 +1389,11 @@ def wants_detail(question: str) -> bool:
 def wants_images(question: str) -> bool:
     q = normalize_text(question)
     return any(normalize_text(marker) in q for marker in IMAGE_MARKERS)
+
+
+def wants_nearby(question: str) -> bool:
+    q = normalize_text(question)
+    return any(normalize_text(marker) in q for marker in NEARBY_MARKERS)
 
 
 def explicit_web_request(question: str) -> bool:
@@ -1221,6 +1522,8 @@ async def openai_rag_answer(
     history: list[HistoryTurn],
     use_web: bool,
     official_record: dict[str, Any] | None = None,
+    nearby_records: list[dict[str, Any]] | None = None,
+    route_records: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not HAS_OPENAI or not api_key:
@@ -1230,6 +1533,9 @@ async def openai_rag_answer(
     context = build_context(hits) if hits else "（data.md 本輪沒有足夠的高相關片段）"
     history_context = build_history_context(history)
     official_context = build_official_context(official_record)
+    nearby_records = nearby_records or []
+    route_records = route_records or []
+    supplemental_official_context = build_official_records_context(nearby_records or route_records)
     detailed = wants_detail(question)
     include_images = wants_images(question)
 
@@ -1243,12 +1549,21 @@ async def openai_rag_answer(
         extra_requirements.append(
             "使用者要求照片：請以 1～3 句簡短說明即可，介面會另外顯示 image search 結果；不要重複上一輪整段介紹。"
         )
+    if wants_nearby(question) and nearby_records:
+        extra_requirements.append(
+            "使用者問『附近還有什麼』：請直接使用提供的附近官方景點清單回答，列出 3～5 個，保持在同一個原始景點周邊，不要另猜其他地區。"
+        )
+    if is_route_request(question) and route_records:
+        extra_requirements.append(
+            "使用者要安排路線：只能以『本輪路線景點資料』為主要站點，按照順遊邏輯安排，不要無故加入新的景點。"
+        )
 
     user_input = (
         f"使用者原始問題：\n{question}\n\n"
         f"已解析問題（用來解決『它、第二個、剛剛推薦的』等指涉）：\n{resolved_question}\n\n"
         f"最近對話：\n{history_context}\n\n"
-        f"桃園觀光官方 Open Data（若有）：\n{official_context}\n\n"
+        f"桃園觀光官方 Open Data（目前主題）：\n{official_context}\n\n"
+        f"附近／路線用的官方景點資料（若有）：\n{supplemental_official_context}\n\n"
         "本輪 data.md 高相關片段（只使用真正與問題有關的片段；不要因片段順帶提到其他景點就展開）：\n\n"
         f"{context}\n\n"
         "回答時先把『已解析問題』完整答好。若本次有 web_search，網路只用來補充同一主題或核對會變動資訊，"
@@ -1273,7 +1588,25 @@ async def openai_rag_answer(
             include_fields.append("web_search_call.results")
         kwargs["include"] = include_fields
 
-    response = await client.responses.create(**kwargs)
+    global _last_openai_model_used
+    model_candidates = [OPENAI_MODEL]
+    if OPENAI_FALLBACK_MODEL and OPENAI_FALLBACK_MODEL not in model_candidates:
+        model_candidates.append(OPENAI_FALLBACK_MODEL)
+
+    response = None
+    model_errors: list[str] = []
+    for candidate_model in model_candidates:
+        try:
+            kwargs["model"] = candidate_model
+            response = await client.responses.create(**kwargs)
+            _last_openai_model_used = candidate_model
+            break
+        except Exception as exc:
+            model_errors.append(f"{candidate_model}: {type(exc).__name__}: {sanitize_error(exc)}")
+
+    if response is None:
+        raise RuntimeError(" | ".join(model_errors) or "OpenAI 所有模型候選都失敗")
+
     answer = (response.output_text or "").strip()
     if not answer:
         raise RuntimeError("OpenAI 回傳空白內容")
@@ -1313,7 +1646,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="6.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="7.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -1347,6 +1680,7 @@ def health() -> dict[str, Any]:
         "web_search_enabled": WEB_SEARCH_ENABLED,
         "official_web_domains": OFFICIAL_WEB_DOMAINS,
         "model": OPENAI_MODEL if os.getenv("OPENAI_API_KEY", "").strip() else None,
+        "fallback_model": OPENAI_FALLBACK_MODEL if os.getenv("OPENAI_API_KEY", "").strip() else None,
     }
 
 
@@ -1367,7 +1701,7 @@ async def image_proxy(url: str = Query(min_length=8, max_length=3000)) -> Respon
     try:
         timeout = httpx.Timeout(15.0, connect=6.0)
         headers = {
-            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/6.0",
+            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/7.0",
             "Referer": "https://travel.tycg.gov.tw/",
         }
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -1389,8 +1723,33 @@ async def image_proxy(url: str = Query(min_length=8, max_length=3000)) -> Respon
         raise HTTPException(status_code=502, detail=f"官方圖片載入失敗：{exc}") from exc
 
 
+@app.get("/diagnostics")
+def diagnostics() -> dict[str, Any]:
+    """公開安全診斷資訊，不回傳 API Key。
+
+    若線上畫面一直顯示「本地 RAG」，這個端點可以直接看出 OpenAI、官方 Open Data
+    或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
+    """
+    return {
+        "app_version": "7.0.0",
+        "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
+        "model": OPENAI_MODEL,
+        "fallback_model": OPENAI_FALLBACK_MODEL or None,
+        "last_model_used": _last_openai_model_used or None,
+        "web_search_enabled": WEB_SEARCH_ENABLED,
+        "last_openai_error": _last_openai_error or None,
+        "last_official_error": _last_official_error or None,
+        "last_image_error": _last_image_error or None,
+        "official_attractions_cached": len(_official_attractions_cache),
+        "official_albums_cached": len(_official_album_cache),
+        "trusted_images_cached": len(_trusted_image_urls),
+    }
+
+
 @app.post("/chat")
 async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
+    global _last_openai_error
+
     rate_limit_or_raise(request)
     question = payload.question.strip()
     history = payload.history[-MAX_HISTORY_TURNS:]
@@ -1403,15 +1762,37 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
     )
     hits = retrieve(resolved_question, focus_entities=focus_entities)
     use_web = should_use_web(question, hits, resolved_question)
+
+    # 只要是追問目前景點（詳細／照片／附近）或路線，都先解析出官方景點記錄。
+    # 這條路徑不依賴 OpenAI，所以 OpenAI 掛掉時「附近」「路線」仍能延續。
     official_record: dict[str, Any] | None = None
-    if use_web or wants_detail(question) or wants_images(question):
+    if use_web or wants_detail(question) or wants_images(question) or wants_nearby(question) or is_route_request(question):
         official_record = await find_official_attraction(resolved_question, focus_entities)
+
+    nearby_records: list[dict[str, Any]] = []
+    if wants_nearby(question) and official_record:
+        nearby_records = await find_nearby_attractions(official_record, limit=5)
+
+    route_records: list[dict[str, Any]] = []
+    if is_route_request(question):
+        route_entities = focus_entities or recent_recommendation_entities(history, payload.last_recommendations)
+        if route_entities:
+            route_records = order_records_by_nearest(await find_official_records_for_entities(route_entities))
 
     base_images: list[dict[str, str]] = []
     if wants_images(question):
         base_images = await get_official_images(resolved_question, official_record, focus_entities)
 
-    recommendations = choose_recommendations(hits, resolved_question) if hits else [item["title"] for item in kb_data[:3]]
+    # 推薦結果不是固定從 data.md 隨機補：問附近時直接把「官方座標算出的附近景點」回存成下一輪記憶。
+    if nearby_records:
+        recommendations = [str(record.get("name") or "").strip() for record in nearby_records if record.get("name")][:5]
+    elif route_records:
+        recommendations = [str(record.get("name") or "").strip() for record in route_records if record.get("name")][:5]
+    elif hits:
+        recommendations = choose_recommendations(hits, resolved_question)
+    else:
+        recommendations = [item["title"] for item in kb_data[:3]]
+
     data_sources = [
         {
             "type": "data",
@@ -1422,6 +1803,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
     ]
     official_source = official_source_from_record(official_record)
     images: list[dict[str, str]] = list(base_images)
+    openai_fallback = False
 
     try:
         answer, web_sources, web_images = await openai_rag_answer(
@@ -1431,7 +1813,10 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
             history=history,
             use_web=use_web,
             official_record=official_record,
+            nearby_records=nearby_records,
+            route_records=route_records,
         )
+        _last_openai_error = ""
         merged_images: list[dict[str, str]] = []
         seen_image_urls: set[str] = set()
         for image in [*base_images, *web_images]:
@@ -1454,13 +1839,16 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
                 seen_source_urls.add(source.get("url"))
         print(
             f"✅ 回答完成｜原問：{question}｜解析：{resolved_question}｜"
-            f"RAG：{', '.join(hit['title'] for hit in hits) or 'none'}｜web={bool(web_sources)}"
+            f"RAG：{', '.join(hit['title'] for hit in hits) or 'none'}｜web={bool(web_sources)}｜images={len(images)}"
         )
     except Exception as exc:
-        # 網路工具失敗時，先退回純 OpenAI + data.md，而不是直接掉到較生硬的本地回答。
+        _last_openai_error = f"{type(exc).__name__}: {sanitize_error(exc)}"
+        openai_fallback = True
+        print(f"⚠️ OpenAI/Web 回答失敗：{_last_openai_error}")
+
+        # 網路工具失敗時先嘗試純 OpenAI；附近/路線/照片的官方資料則無論如何保留。
         if use_web and hits:
             try:
-                print(f"⚠️ 官方網路搜尋失敗，退回純 AI RAG：{exc}")
                 answer, _, _ = await openai_rag_answer(
                     question=question,
                     resolved_question=resolved_question,
@@ -1468,25 +1856,45 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
                     history=history,
                     use_web=False,
                     official_record=official_record,
+                    nearby_records=nearby_records,
+                    route_records=route_records,
+                )
+                mode = "openai-rag"
+                sources = [*data_sources, *([official_source] if official_source else [])]
+                images = _register_trusted_images(list(base_images))
+            except Exception as second_exc:
+                _last_openai_error = f"{type(second_exc).__name__}: {sanitize_error(second_exc)}"
+                print(f"⚠️ 純 OpenAI 也不可用，改採 deterministic fallback：{_last_openai_error}")
+                answer = local_rag_answer(
+                    question,
+                    hits,
+                    official_record,
+                    base_images,
+                    nearby_records=nearby_records,
+                    route_records=route_records,
                 )
                 sources = [*data_sources, *([official_source] if official_source else [])]
-                images = list(base_images)
-                mode = "openai-rag"
-            except Exception as second_exc:
-                print(f"⚠️ OpenAI 也不可用，改採本地 RAG：{second_exc}")
-                answer = local_rag_answer(question, hits, official_record, base_images)
-                sources = [*data_sources, *([official_source] if official_source else [])]
-                images = list(base_images)
+                images = _register_trusted_images(list(base_images))
                 mode = "local-rag"
         else:
-            print(f"⚠️ OpenAI 不可用，改採本地 RAG：{exc}")
-            answer = local_rag_answer(question, hits, official_record, base_images)
+            answer = local_rag_answer(
+                question,
+                hits,
+                official_record,
+                base_images,
+                nearby_records=nearby_records,
+                route_records=route_records,
+            )
             sources = [*data_sources, *([official_source] if official_source else [])]
-            images = list(base_images)
+            images = _register_trusted_images(list(base_images))
             mode = "local-rag"
 
+    # active_topics 只代表「目前正在聊的核心主題」。
+    # 問附近後仍保留原景點；推薦清單另存在 recommendations，使用者才能下一句說「第二個」。
     if focus_entities:
         active_topics = list(dict.fromkeys(focus_entities))[:5]
+    elif official_record and official_record.get("name"):
+        active_topics = [str(official_record["name"])]
     elif hits:
         active_topics = [hits[0]["title"]]
     else:
@@ -1502,6 +1910,13 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "resolved_question": resolved_question,
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
+        "debug": {
+            "app_version": "7.0.0",
+            "openai_fallback": openai_fallback,
+            "image_count": len(images),
+            "nearby_count": len(nearby_records),
+            "route_count": len(route_records),
+        },
     }
 
 

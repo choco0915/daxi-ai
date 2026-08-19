@@ -3,6 +3,7 @@
 """
 
 import unittest
+import time
 
 import app
 
@@ -70,6 +71,13 @@ class RagRetrievalTests(unittest.TestCase):
         self.assertEqual(focus, ["中正公園"])
         titles = [h["title"] for h in app.retrieve(resolved, focus_entities=focus)]
         self.assertEqual(titles, ["中正公園"])
+
+    def test_followup_multiple_ordinals_for_route(self) -> None:
+        recs = ["大溪橋", "中正公園", "大溪木藝生態博物館"]
+        resolved, focus = app.resolve_question("把第二個跟第三個排成兩小時路線", [], recs, ["福仁宮"])
+        self.assertEqual(focus, ["中正公園", "大溪木藝生態博物館"])
+        self.assertIn("中正公園", resolved)
+        self.assertIn("大溪木藝生態博物館", resolved)
 
     def test_followup_route_uses_previous_recommendations(self) -> None:
         history = [
@@ -149,6 +157,79 @@ class RagRetrievalTests(unittest.TestCase):
         }])
         self.assertEqual(len(images), 1)
         self.assertTrue(images[0]["proxy_url"].startswith("/image-proxy?url="))
+
+
+class ConversationAndOfficialFallbackTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        app.build_search_index()
+
+    def setUp(self) -> None:
+        self.old_cache = list(app._official_attractions_cache)
+        self.old_cache_at = app._official_attractions_cache_at
+        app._official_attractions_cache = [
+            {
+                "id": "1172", "name": "福仁宮", "px": "121.2860", "py": "24.8840",
+                "summary": "福仁宮官方摘要", "description": "福仁宮官方詳細內容",
+                "address": "桃園市大溪區和平路100號", "open_time": "04:00~20:30",
+                "tel": "03-3883261", "pictures": [],
+                "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/attraction/1172",
+            },
+            {
+                "id": "2001", "name": "大溪老街", "px": "121.2870", "py": "24.8850",
+                "summary": "大溪老街官方摘要", "description": "", "address": "大溪區",
+                "open_time": "", "tel": "", "pictures": [],
+                "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/attraction/414",
+            },
+            {
+                "id": "2002", "name": "中正公園", "px": "121.2850", "py": "24.8860",
+                "summary": "中正公園官方摘要", "description": "", "address": "大溪區",
+                "open_time": "", "tel": "", "pictures": [],
+                "source_url": "https://travel.tycg.gov.tw/",
+            },
+            {
+                "id": "2003", "name": "大溪橋", "px": "121.2880", "py": "24.8860",
+                "summary": "大溪橋官方摘要", "description": "", "address": "大溪區",
+                "open_time": "", "tel": "", "pictures": [],
+                "source_url": "https://travel.tycg.gov.tw/",
+            },
+        ]
+        app._official_attractions_cache_at = time.time()
+
+    def tearDown(self) -> None:
+        app._official_attractions_cache = self.old_cache
+        app._official_attractions_cache_at = self.old_cache_at
+
+    def test_nearby_followup_keeps_active_topic(self) -> None:
+        resolved, focus = app.resolve_question("那附近還有什麼？", [], [], ["福仁宮"])
+        self.assertEqual(focus, ["福仁宮"])
+        self.assertIn("福仁宮", resolved)
+
+    async def test_nearby_fallback_works_without_openai(self) -> None:
+        origin = await app.find_official_attraction("福仁宮", ["福仁宮"])
+        nearby = await app.find_nearby_attractions(origin, limit=5)
+        self.assertGreaterEqual(len(nearby), 2)
+        answer = app.local_rag_answer("那附近還有什麼？", [], origin, [], nearby_records=nearby)
+        self.assertIn("大溪老街", answer)
+        self.assertIn("中正公園", answer)
+
+    async def test_official_only_detail_works_without_local_hit(self) -> None:
+        record = await app.find_official_attraction("福仁宮", ["福仁宮"])
+        answer = app.local_rag_answer("再詳細一點", [], record)
+        self.assertIn("福仁宮官方詳細內容", answer)
+        self.assertIn("和平路100號", answer)
+
+    def test_album_html_image_extraction(self) -> None:
+        html = '<img data-src="/image/12345/480x360"><script>const p="https://travel.tycg.gov.tw/image/88888/1280x720";</script>'
+        urls = app._extract_image_urls_from_html(html, "https://travel.tycg.gov.tw/zh-tw/multimedia/album/3431")
+        self.assertIn("https://travel.tycg.gov.tw/image/12345/480x360", urls)
+        self.assertIn("https://travel.tycg.gov.tw/image/88888/1280x720", urls)
+
+    def test_known_furen_album_fallback_exists(self) -> None:
+        self.assertEqual(
+            app.OFFICIAL_ALBUM_PAGE_MAP.get("福仁宮"),
+            "https://travel.tycg.gov.tw/zh-tw/multimedia/album/3431",
+        )
 
 
 if __name__ == "__main__":

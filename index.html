@@ -929,7 +929,7 @@
     <script>
         "use strict";
 
-        const STORAGE_KEY = "daxi-ai-chats-v6";
+        const STORAGE_KEY = "daxi-ai-chats-v7";
         const STORYMAP_URL = "https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27";
         const QUICK_QUESTIONS = [
             "大溪老街有什麼歷史特色？",
@@ -1283,7 +1283,10 @@
                     } else if (mode === "openai-rag") {
                         modeChip.textContent = "🤖 AI RAG";
                     } else {
-                        modeChip.textContent = "🧩 本地 RAG";
+                        modeChip.textContent = "🧩 本地備援";
+                        modeChip.title = "OpenAI 本輪未成功使用；可開啟 /diagnostics 查看安全診斷資訊";
+                        modeChip.style.cursor = "pointer";
+                        modeChip.addEventListener("click", () => window.open("/diagnostics", "_blank", "noopener"));
                     }
                     row.appendChild(modeChip);
                 }
