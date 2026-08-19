@@ -253,6 +253,21 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
     def setUpClass(cls) -> None:
         app.build_search_index()
 
+    def test_v15_bundled_official_catalog_is_available(self) -> None:
+        items, snapshot_date = app._load_bundled_daxi_catalog()
+        self.assertGreaterEqual(len(items), 200)
+        self.assertTrue(snapshot_date)
+        names = {item.get("name") for item in items}
+        self.assertIn("陳媽媽月光餅", names)
+
+    def test_v15_mooncake_alias_matches_bundled_catalog(self) -> None:
+        items, _ = app._load_bundled_daxi_catalog()
+        mooncake = next(item for item in items if item.get("name") == "陳媽媽月光餅")
+        self.assertGreaterEqual(app._catalog_match_score("月光餅", mooncake), 90)
+        record = app._record_from_catalog_item(mooncake)
+        self.assertEqual(record.get("name"), "陳媽媽月光餅")
+        self.assertIn("和平路87號", record.get("address", ""))
+
     def setUp(self) -> None:
         self.old_consume_cache = list(app._official_consume_cache)
         self.old_consume_at = app._official_consume_cache_at

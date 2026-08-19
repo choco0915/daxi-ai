@@ -179,3 +179,19 @@ V14 改成直接把桃園觀光官方「大溪老街周邊店家」頁作為大�
 ```
 
 確認 `app_version` 為 `14.0.0`，並確認 `official_consume_catalog_cached` 大於 0。若能命中，`official_entity.name` 應出現「陳媽媽月光餅」。
+
+## V15：修正 Render 無法建立官方店家索引
+
+V14 線上診斷顯示 `official_consume_catalog_cached: 0`。原因不是「月光餅」不存在，而是 Render 對桃園觀光周邊店家頁的 HTML 解析沒有取得 `/consume/detail/...` 連結；同時公開搜尋引擎也可能逾時，因此外部名詞最後又退回寬泛的 `data.md` 章節。
+
+V15 改成 **官方快照優先 + 線上增量更新**：
+
+1. 專案新增 `official_daxi_catalog.json`。
+2. 此檔案是依桃園觀光官方「大溪老街周邊店家」頁建立的名稱索引快照，而不是 AI 自行捏造的店家資料。
+3. 啟動後即使 Render 無法解析官方列表 HTML，仍可辨識這些 `data.md` 外的店家／商品關聯名稱。
+4. 若官方 Detail 頁可連線，仍會即時取得更完整的地址、電話、營業資訊與介紹。
+5. 線上官方 HTML 能正常解析時，會和 bundled snapshot 合併，不會被快照鎖死。
+
+例如「月光餅」會先匹配官方索引中的「陳媽媽月光餅」，再嘗試官方 Detail 頁；即使 Detail 頁暫時無法連線，也不會再退回只有「伴手禮推薦／傳統甜品與小吃」的寬泛回答。
+
+部署 V15 時，除了 `app.py` 之外，**一定要把 `official_daxi_catalog.json` 放在 repository 根目錄**，和 `app.py`、`data.md` 同一層。
