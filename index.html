@@ -173,9 +173,9 @@
 
         .layout {
             display: grid;
-            grid-template-columns: 270px minmax(0, 1fr) 360px;
-            gap: 18px;
-            padding: 18px;
+            grid-template-columns: 240px minmax(0, 1fr) 310px;
+            gap: 12px;
+            padding: 14px;
             min-height: 0;
             overflow: hidden;
         }
@@ -291,10 +291,10 @@
 
         .chat-panel {
             display: grid;
-            grid-template-rows: auto auto 1fr auto auto;
+            grid-template-rows: auto 1fr auto auto;
             min-height: 0;
-            padding: 18px;
-            gap: 14px;
+            padding: 14px;
+            gap: 10px;
         }
 
         .hero {
@@ -333,9 +333,9 @@
         .dougan-avatar-img {
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain;
             display: block;
-            background: rgba(255,255,255,0.06);
+            background: #212222;
         }
 
         .hero-title { font-size: clamp(26px, 3.2vw, 34px); font-weight: 900; margin-bottom: 8px; }
@@ -372,6 +372,26 @@
         }
 
         .welcome-container:empty { display: none; }
+
+        .welcome-container {
+            min-height: 0;
+            padding: 2px 0;
+        }
+
+        .welcome-container .quick-buttons {
+            gap: 8px;
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            padding-bottom: 2px;
+            scrollbar-width: thin;
+        }
+
+        .welcome-container .quick-btn {
+            flex: 0 0 auto;
+            white-space: nowrap;
+            padding: 8px 12px;
+            font-size: 13px;
+        }
 
         .quick-buttons,
         .recommend-box {
@@ -413,7 +433,7 @@
         .message.user .message-inner { flex-direction: row-reverse; }
 
         .message-inner {
-            max-width: min(880px, 100%);
+            max-width: min(980px, 100%);
             display: flex;
             gap: 12px;
             align-items: flex-start;
@@ -442,6 +462,7 @@
             height: 100%;
             object-fit: cover;
             display: block;
+            background: #212222;
         }
 
         .avatar.user {
@@ -462,7 +483,7 @@
         }
 
         .bubble {
-            max-width: min(760px, 78vw);
+            max-width: min(880px, 82vw);
             padding: 16px 18px;
             border-radius: 22px;
             border: 1px solid rgba(255,255,255,0.12);
@@ -478,9 +499,9 @@
 
         .message-text {
             color: #f7fbff;
-            font-size: 17px;
+            font-size: 18px;
             font-weight: 540;
-            line-height: 1.85;
+            line-height: 1.9;
         }
 
         .message-text .rich-heading {
@@ -600,13 +621,13 @@
         .guide-card {
             padding: 16px;
             display: grid;
-            grid-template-columns: 64px 1fr;
+            grid-template-columns: 76px 1fr;
             gap: 14px;
         }
 
         .guide-avatar {
-            width: 64px;
-            height: 64px;
+            width: 76px;
+            height: 76px;
             border-radius: 20px;
             display: grid;
             place-items: center;
@@ -696,7 +717,7 @@
         }
 
         @media (max-width: 1380px) {
-            .layout { grid-template-columns: 250px minmax(0, 1fr) 330px; }
+            .layout { grid-template-columns: 220px minmax(0, 1fr) 290px; }
         }
 
         @media (max-width: 1180px) {
@@ -802,26 +823,6 @@
             </aside>
 
             <main class="panel chat-panel">
-                <section class="hero">
-                    <div class="guide-avatar-large"><img class="dougan-avatar-img" data-dougan-avatar src="/static/dougan-di-fallback.svg" alt="大溪豆干弟"></div>
-                    <div>
-                        <h1 class="hero-title">跟著豆干弟，一起逛大溪老街</h1>
-                        <p class="hero-desc">
-                            我會用 <strong>豆干弟</strong> 的角色陪你導覽大溪，回答會盡量根據 <strong>data.md</strong> 的知識內容來整理，並搭配景點卡片、行程靈感、故事地圖與地圖導航，讓網站更像正式作品展示頁。
-                        </p>
-                        <div class="hero-actions">
-                            <button class="pill-btn" type="button" data-ask="第一次來大溪怎麼安排半日遊？">🧭 問半日遊</button>
-                            <button class="pill-btn" type="button" data-ask="大溪有哪些必吃美食？">🍴 問美食</button>
-                            <button class="pill-btn" type="button" data-ask="大溪老街的巴洛克建築有什麼特色？">🏛️ 問建築</button>
-                        </div>
-                        <div class="hero-metrics">
-                            <span class="metric-chip">📚 data.md 為主要事實來源</span>
-                            <span class="metric-chip">🧠 對話脈絡記憶</span>
-                            <span class="metric-chip">🔗 ArcGIS StoryMap 連結</span>
-                        </div>
-                    </div>
-                </section>
-
                 <section class="welcome-container" id="welcome-container"></section>
                 <div class="chat-window" id="chat-messages"></div>
                 <div class="recommend-area" id="rec-container"></div>
@@ -841,7 +842,7 @@
             <aside class="panel showcase-panel">
                 <div class="scroll-area">
                     <section class="guide-card">
-                        <div class="guide-avatar"><img class="dougan-avatar-img" data-dougan-avatar src="/static/dougan-di-fallback.svg" alt="大溪豆干弟"></div>
+                        <div class="guide-avatar"><img class="dougan-avatar-img" data-dougan-avatar src="/static/dougan-di.png" alt="大溪豆干弟"></div>
                         <div>
                             <h3>豆干弟上線</h3>
                             <p>從老街歷史、六二四、木藝文化到美食路線，我會用比較親切的導覽口吻陪你認識大溪，也會在回答底下標示這次參考到的章節來源。</p>
@@ -886,10 +887,6 @@
 
         const STORAGE_KEY = "daxi-ai-chats-v3";
         const STORYMAP_URL = "https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27";
-        const STORYMAP_ITEM_ID = "b704c98b362041c1be364ad2c8ca3d27";
-        const STORYMAP_DATA_URL = `https://www.arcgis.com/sharing/rest/content/items/${STORYMAP_ITEM_ID}/data?f=json`;
-        const STORYMAP_RESOURCE_BASE = `https://www.arcgis.com/sharing/rest/content/items/${STORYMAP_ITEM_ID}/resources/`;
-        const AVATAR_CACHE_KEY = "daxi-storymap-dougan-avatar-v1";
         const QUICK_QUESTIONS = [
             "大溪老街有什麼歷史特色？",
             "大溪有哪些必吃美食？",
@@ -1134,7 +1131,7 @@
                 const avatarImg = document.createElement("img");
                 avatarImg.className = "dougan-avatar-img";
                 avatarImg.dataset.douganAvatar = "";
-                avatarImg.src = sessionStorage.getItem(AVATAR_CACHE_KEY) || "/static/dougan-di-fallback.svg";
+                avatarImg.src = "/static/dougan-di.png";
                 avatarImg.alt = "大溪豆干弟";
                 avatar.appendChild(avatarImg);
             } else {
@@ -1444,111 +1441,6 @@
             await askQuestion(userInput.value);
         }
 
-        function resolveStoryMapImageUrl(resourceKey, resources) {
-            if (!resourceKey) return "";
-            const resource = resources?.[resourceKey] || resourceKey;
-            const data = resource?.data || resource || {};
-
-            const directCandidates = [
-                data.src,
-                data.url,
-                data.uri,
-                resource?.src,
-                resource?.url,
-                resource?.uri
-            ].filter(Boolean);
-
-            for (const candidate of directCandidates) {
-                if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) {
-                    return candidate;
-                }
-            }
-
-            const resourceId = data.resourceId || data.resource || data.itemResourceId || resource?.resourceId;
-            if (typeof resourceId === "string" && resourceId) {
-                return STORYMAP_RESOURCE_BASE + resourceId.split("/").map(encodeURIComponent).join("/");
-            }
-            return "";
-        }
-
-        function findDouganDiStoryMapImage(story) {
-            const nodes = story?.nodes || {};
-            const resources = story?.resources || {};
-            const keywords = ["豆干弟", "豆乾弟", "豆干小弟", "導覽豆干"];
-
-            // 第一優先：圖片節點本身的 alt/caption/title 有標示「豆干弟」。
-            for (const node of Object.values(nodes)) {
-                if (!node || node.type !== "image") continue;
-                const searchable = JSON.stringify(node);
-                if (!keywords.some((keyword) => searchable.includes(keyword))) continue;
-                const imageRef = node?.data?.image || node?.data?.resource || node?.data?.resourceId;
-                const resolved = resolveStoryMapImageUrl(imageRef, resources);
-                if (resolved) return resolved;
-            }
-
-            // 第二優先：找含「豆干弟」文字的群組/區塊，再從同一物件中的圖片引用解析。
-            const seen = new Set();
-            function walk(value) {
-                if (!value || typeof value !== "object" || seen.has(value)) return "";
-                seen.add(value);
-                const searchable = JSON.stringify(value);
-                if (keywords.some((keyword) => searchable.includes(keyword))) {
-                    const refs = [];
-                    const collect = (v) => {
-                        if (!v) return;
-                        if (typeof v === "string") {
-                            if (resources[v]) refs.push(v);
-                            if (/^https?:\/\/.+\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(v)) refs.push(v);
-                            return;
-                        }
-                        if (typeof v === "object") Object.values(v).forEach(collect);
-                    };
-                    collect(value);
-                    for (const ref of refs) {
-                        if (/^https?:\/\//i.test(ref)) return ref;
-                        const resolved = resolveStoryMapImageUrl(ref, resources);
-                        if (resolved) return resolved;
-                    }
-                }
-                for (const child of Object.values(value)) {
-                    const found = walk(child);
-                    if (found) return found;
-                }
-                return "";
-            }
-            return walk(story);
-        }
-
-        function applyDouganAvatar(url) {
-            if (!url) return;
-            document.querySelectorAll("[data-dougan-avatar]").forEach((img) => {
-                if (img instanceof HTMLImageElement) {
-                    img.src = url;
-                    img.onerror = () => {
-                        img.onerror = null;
-                        img.src = "/static/dougan-di-fallback.svg";
-                    };
-                }
-            });
-        }
-
-        async function loadDouganDiFromStoryMap() {
-            const cached = sessionStorage.getItem(AVATAR_CACHE_KEY);
-            if (cached) applyDouganAvatar(cached);
-
-            try {
-                const response = await fetch(STORYMAP_DATA_URL, { mode: "cors", cache: "no-store" });
-                if (!response.ok) throw new Error(`StoryMap data ${response.status}`);
-                const story = await response.json();
-                const imageUrl = findDouganDiStoryMapImage(story);
-                if (!imageUrl) return;
-                sessionStorage.setItem(AVATAR_CACHE_KEY, imageUrl);
-                applyDouganAvatar(imageUrl);
-            } catch (error) {
-                console.info("StoryMap 豆干弟圖片暫時無法自動取得，先使用本地備援圖。", error);
-            }
-        }
-
         function renderSpotCards() {
             spotGrid.replaceChildren();
             SPOTS.forEach((spot) => {
@@ -1646,7 +1538,6 @@
             button.addEventListener("click", () => askQuestion(button.getAttribute("data-ask") || ""));
         });
 
-        loadDouganDiFromStoryMap();
         renderSpotCards();
         renderRouteCards();
 
