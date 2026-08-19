@@ -411,6 +411,21 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(app.should_discover_external("月光餅", hits, []))
 
 
+    def test_v14_daxi_nearby_shopping_parser(self) -> None:
+        html = """
+        <nav><a href='?page=1'>1</a><a href='?page=9'>9</a></nav>
+        <article><a href='/zh-tw/consume/detail/1947' title='陳媽媽月光餅'><img alt='陳媽媽月光餅'></a><span>191 公尺</span></article>
+        <article><a href='/zh-tw/consume/detail/2222'><strong>小鎮豆花</strong></a><span>56 公尺</span></article>
+        """
+        items = app._extract_consume_detail_links(html, app.TYCG_DAXI_NEARBY_SHOPPING_URL)
+        self.assertEqual(app._extract_max_page(html), 9)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["name"], "陳媽媽月光餅")
+        self.assertTrue(items[0]["url"].endswith("/zh-tw/consume/detail/1947"))
+
+    def test_v14_partial_product_name_matches_store_name(self) -> None:
+        self.assertGreaterEqual(app.attraction_match_score("月光餅", "陳媽媽月光餅"), 60)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

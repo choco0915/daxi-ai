@@ -158,3 +158,24 @@ V13 增加最後一道嚴格相關性閘門：
 ```
 
 確認 `app_version` 為 `13.0.0`。`public_results` 可以是桃園觀光官方結果，也可以暫時為空；但不應再出現與月光餅、大溪或桃園毫無關係的 Mars、法文划船等結果。
+
+## V14：data.md 之外的大溪名詞搜尋修正
+
+V10～V13 的問題不是 RAG 不知道要外搜，而是 Render 實際抓不到舊的 Consume OpenData / JS 型總表，因此 `official_consume_catalog_cached` 一直是 0；一般搜尋引擎在 Render 上又可能被改寫或反爬，造成外部搜尋不是空結果，就是混入無關網站。
+
+V14 改成直接把桃園觀光官方「大溪老街周邊店家」頁作為大溪店家索引來源：
+
+- 主索引：`https://travel.tycg.gov.tw/zh-tw/travel/nearby-shopping/414`
+- 會讀取官方分頁並抓 `/zh-tw/consume/detail/<id>` 店家連結。
+- 支援部分名稱匹配，例如「月光餅」可以命中「陳媽媽月光餅」。
+- 找到店家後會直接進官方 Detail 頁抓名稱、介紹、地址、營業資訊與電話。
+- 舊 OpenData 只保留為 fallback，不再是第一順位。
+- 一般 Bing / DuckDuckGo 仍只當最後備援，且保留嚴格相關性過濾，避免再次出現 Mars / 法文網站等無關結果。
+
+部署後可用：
+
+```text
+/diagnostics/search?name=月光餅
+```
+
+確認 `app_version` 為 `14.0.0`，並確認 `official_consume_catalog_cached` 大於 0。若能命中，`official_entity.name` 應出現「陳媽媽月光餅」。

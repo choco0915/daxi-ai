@@ -52,6 +52,11 @@ TYCG_CONSUME_DATASET_PAGE = f"https://opendata.tycg.gov.tw/datalist/{TYCG_CONSUM
 TYCG_CONSUME_OPEN_DATA_CANDIDATES: tuple[str, ...] = ()
 TYCG_REGION_LIST_URL = "https://travel.tycg.gov.tw/zh-tw/travel/listbyregion"
 TYCG_CONSUME_LIST_URL = "https://travel.tycg.gov.tw/zh-tw/consume/list"
+# 大溪老街官方「周邊店家／景點」頁是目前最穩定的 Daxi 官方索引來源。
+# 它們是由桃園觀光導覽網伺服器輸出的公開頁面，不依賴已變動的 OpenData Consume 路徑。
+TYCG_DAXI_ANCHOR_ID = 414
+TYCG_DAXI_NEARBY_SHOPPING_URL = f"https://travel.tycg.gov.tw/zh-tw/travel/nearby-shopping/{TYCG_DAXI_ANCHOR_ID}"
+TYCG_DAXI_NEARBY_ATTRACTIONS_URL = f"https://travel.tycg.gov.tw/zh-tw/travel/nearby-attractions/{TYCG_DAXI_ANCHOR_ID}"
 TYCG_SEARCH_URL = "https://travel.tycg.gov.tw/zh-tw/search"
 TYCG_ALBUM_OPEN_DATA_CANDIDATES = (
     "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAlbum",
@@ -1370,21 +1375,84 @@ def _extract_consume_detail_links(html: str, base_url: str) -> list[dict[str, st
     return results
 
 
-async def _load_official_consume_catalog() -> list[dict[str, str]]:
-    """建立桃園觀光官方店家索引。
+def _extract_max_page(html: str, default: int = 1, cap: int = 20) -> int:
+    """從桃園觀光分頁連結推算最大頁碼；抓不到就只取目前頁。"""
+    pages = [int(value) for value in re.findall(r"[?&]page=(\d+)", html or "") if value.isdigit()]
+    return max(1, min(max(pages, default=default), cap))
 
-    V12 不再把已失效的 /OpenData/Consume 或猜測的 /open-api/zh-tw/Consume
-    當主要來源。桃園觀光目前的「各區景點」頁本身就列出大溪區的「吃美味／購好物」
-    並連到 /zh-tw/consume/detail/<id>，因此直接用這個官方頁建立索引更穩定。
+
+def _extract_consume_detail_links(html: str, base_url: str) -> list[dict[str, str]]:
+    """從桃園觀光店家列表抽取店名與 /consume/detail/<id>。
+
+    官方卡片有時把店名放在 <a> 文字、有時放 title/aria-label、甚至放在
+    圖片 alt 或相鄰標籤。這裡不再只依賴單一 anchor 文字結構。
+    """
+    decoded = unescape((html or "").replace("\\/", "/"))
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    href_pattern = re.compile(
+        r'href=["\']([^"\']*/(?:zh-tw/)?consume/detail/\d+[^"\']*)["\']',
+        re.I,
+    )
+    for match in href_pattern.finditer(decoded):
+        url = urljoin(base_url, match.group(1))
+        if url in seen:
+            continue
+
+        # 先取完整 a 標籤內容與屬性。
+        a_start = decoded.rfind("<a", max(0, match.start() - 500), match.start() + 1)
+        a_end = decoded.find("</a>", match.end(), min(len(decoded), match.end() + 2200))
+        anchor_html = decoded[a_start:a_end + 4] if a_start >= 0 and a_end >= 0 else ""
+        name = _strip_html_text(anchor_html).strip()
+
+        # title / aria-label / 圖片 alt 比附近自由文字可靠。
+        if len(name) < 2:
+            for attr in ("title", "aria-label", "alt"):
+                m = re.search(rf'{attr}=["\']([^"\']{{2,80}})["\']', anchor_html, flags=re.I)
+                if m:
+                    candidate = _strip_html_text(m.group(1)).strip()
+                    if candidate:
+                        name = candidate
+                        break
+
+        # 最後才看附近卡片文字，移除「xx 公尺／公里」等距離資訊。
+        if len(name) < 2:
+            left = max(0, match.start() - 900)
+            right = min(len(decoded), match.end() + 1200)
+            nearby = _strip_html_text(decoded[left:right])
+            nearby = re.sub(r"\d+(?:\.\d+)?\s*(?:公尺|公里)", " ", nearby)
+            candidates = re.findall(r"[\u4e00-\u9fffA-Za-z0-9（）()·・＆&\-\s]{2,60}", nearby)
+            cleaned = [re.sub(r"\s+", " ", x).strip(" -|｜") for x in candidates]
+            name = next((x for x in cleaned if 2 <= len(x) <= 50 and "桃園觀光" not in x and "周邊店家" not in x), "")
+
+        # 清掉常見距離與導覽殘字。
+        name = re.sub(r"\s*\d+(?:\.\d+)?\s*(?:公尺|公里).*?$", "", name).strip()
+        if not name:
+            continue
+        seen.add(url)
+        results.append({"name": name, "url": url})
+    return results
+
+
+async def _load_official_consume_catalog() -> list[dict[str, str]]:
+    """建立大溪官方店家索引（V14）。
+
+    V10~V13 的根因是一直嘗試不穩定／已改版的 Consume API 或 JS 總表，
+    Render 實際拿不到任何店家，因此 official_consume_catalog_cached 永遠是 0。
+
+    V14 改以桃園觀光官方「大溪老街周邊店家」作為主索引：該頁目前由官方
+    伺服器公開列出 200+ 間周邊店家，包含「陳媽媽月光餅」等店家，且有分頁。
+    這是 Daxi 導覽機器人最相關、也比猜 API endpoint 穩定的來源。
     """
     global _official_consume_catalog_cache, _official_consume_catalog_cache_at, _last_official_error
     now = time.time()
     if _official_consume_catalog_cache and now - _official_consume_catalog_cache_at < OFFICIAL_CACHE_SECONDS:
         return _official_consume_catalog_cache
 
-    timeout = httpx.Timeout(14.0, connect=6.0)
+    timeout = httpx.Timeout(15.0, connect=6.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/12.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/14.0)",
         "Accept-Language": "zh-TW,zh;q=0.9",
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     }
@@ -1392,44 +1460,60 @@ async def _load_official_consume_catalog() -> list[dict[str, str]]:
     errors: list[str] = []
 
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-        # 第一優先：官方「各區景點」頁。此頁目前會直接列出大溪區的吃美味與購好物，
-        # 並含 consume/detail/<id> 連結，因此不需要猜 Swagger 實際 endpoint。
+        # 1) 大溪老街周邊店家：這是大溪專用、最可靠的官方實體索引。
         try:
-            region = await client.get(TYCG_REGION_LIST_URL)
-            region.raise_for_status()
-            catalog.extend(_extract_consume_detail_links(region.text, str(region.url)))
-            if catalog:
-                print(f"🍴 桃園觀光各區景點 HTML 店家索引：{len(catalog)} 筆")
-        except Exception as exc:
-            errors.append(f"region-list: {type(exc).__name__}: {sanitize_error(exc)}")
+            first = await client.get(TYCG_DAXI_NEARBY_SHOPPING_URL)
+            first.raise_for_status()
+            catalog.extend(_extract_consume_detail_links(first.text, str(first.url)))
+            max_page = _extract_max_page(first.text, default=1, cap=15)
 
-        # 第二優先：若官方仍保留獨立 consume list 就補抓；404 不視為整體失敗。
+            if max_page > 1:
+                async def fetch_page(page: int) -> list[dict[str, str]]:
+                    try:
+                        response = await client.get(TYCG_DAXI_NEARBY_SHOPPING_URL, params={"page": page})
+                        if response.status_code >= 400:
+                            return []
+                        return _extract_consume_detail_links(response.text, str(response.url))
+                    except Exception as exc:
+                        errors.append(f"daxi-shopping-page-{page}: {type(exc).__name__}: {sanitize_error(exc)}")
+                        return []
+
+                pages = await asyncio.gather(*(fetch_page(page) for page in range(2, max_page + 1)))
+                for items in pages:
+                    catalog.extend(items)
+
+            if catalog:
+                print(f"🍴 大溪老街官方周邊店家索引：{len(catalog)} 筆（{max_page} 頁）")
+        except Exception as exc:
+            errors.append(f"daxi-shopping: {type(exc).__name__}: {sanitize_error(exc)}")
+
+        # 2) 主索引真的失敗時，才嘗試舊的官方頁，不再把它們放在第一順位。
         if not catalog:
-            try:
-                first = await client.get(TYCG_CONSUME_LIST_URL)
-                if first.status_code < 400:
-                    catalog.extend(_extract_consume_detail_links(first.text, str(first.url)))
-            except Exception as exc:
-                errors.append(f"consume-list: {type(exc).__name__}: {sanitize_error(exc)}")
+            for fallback_url in (TYCG_REGION_LIST_URL, TYCG_CONSUME_LIST_URL):
+                try:
+                    response = await client.get(fallback_url)
+                    if response.status_code < 400:
+                        catalog.extend(_extract_consume_detail_links(response.text, str(response.url)))
+                    if catalog:
+                        break
+                except Exception as exc:
+                    errors.append(f"fallback-catalog: {type(exc).__name__}: {sanitize_error(exc)}")
 
     unique: dict[str, dict[str, str]] = {}
     for item in catalog:
-        url = item.get("url", "")
-        name = item.get("name", "").strip()
+        url = str(item.get("url") or "").strip()
+        name = re.sub(r"\s+", " ", str(item.get("name") or "")).strip()
         if not url or not name:
             continue
-        # 導覽頁有可能同一店家同時出現在「吃美味」與「購好物」，用 URL 去重。
-        if url not in unique:
-            unique[url] = {"name": name, "url": url}
+        unique.setdefault(url, {"name": name, "url": url})
 
     _official_consume_catalog_cache = list(unique.values())
     _official_consume_catalog_cache_at = now
     if _official_consume_catalog_cache:
-        # HTML 索引成功時清掉前面 Open Data resource discovery 的非致命提示。
         _last_official_error = ""
-        print(f"🍴 桃園觀光官方店家索引快取：{len(_official_consume_catalog_cache)} 筆")
-    elif errors:
-        _last_official_error = " | ".join(errors[-3:])
+        print(f"🍴 桃園觀光大溪店家索引快取：{len(_official_consume_catalog_cache)} 筆")
+    else:
+        _last_official_error = " | ".join(errors[-5:]) if errors else "大溪老街官方周邊店家頁未解析到 consume/detail 連結"
     return _official_consume_catalog_cache
 
 
@@ -1517,6 +1601,15 @@ async def _find_consume_from_official_catalog(query: str, focus_entities: list[s
 
 
 async def find_official_consume(query: str, focus_entities: list[str] | None = None) -> dict[str, Any] | None:
+    """搜尋桃園官方店家／美食。
+
+    V14 先走「大溪老街周邊店家」官方 HTML 索引，因為 Render 已實證舊 Consume
+    OpenData 路徑可能 404。只有 HTML 索引找不到時才嘗試 OpenData cache。
+    """
+    catalog_record = await _find_consume_from_official_catalog(query, focus_entities)
+    if catalog_record:
+        return catalog_record
+
     records = await load_official_consumes()
     candidate_queries = entity_query_variants(query, focus_entities)
     best: tuple[float, dict[str, Any] | None] = (0.0, None)
@@ -1532,9 +1625,7 @@ async def find_official_consume(query: str, focus_entities: list[str] | None = N
             best = (score, record)
     if best[0] >= 60 and best[1]:
         return best[1]
-
-    # Open Data 端點變動／暫時失效時，仍從官方「美食快搜」HTML 索引找實體。
-    return await _find_consume_from_official_catalog(query, focus_entities)
+    return None
 
 
 async def find_official_entity(query: str, focus_entities: list[str] | None = None) -> dict[str, Any] | None:
@@ -1809,13 +1900,13 @@ def _extract_ddg_results(html: str, limit: int = 5) -> list[dict[str, str]]:
 
 
 async def public_web_search(query: str, limit: int = 5) -> list[dict[str, str]]:
-    """無需 OpenAI 額度的外部搜尋備援（V13 嚴格相關性版）。
+    """無需 OpenAI 額度的外部搜尋備援（V14 嚴格相關性版）。
 
     先找桃園官方來源，再找其他官方來源；只有官方真的沒有結果，才允許一般網路，
     且一般結果必須同時命中查詢詞與「大溪／桃園」脈絡。
     """
     global _last_public_search_error
-    key = "v13:" + normalize_text(query)
+    key = "v14:" + normalize_text(query)
     cached = _public_search_cache.get(key)
     if cached and time.time() - cached[0] < OFFICIAL_CACHE_SECONDS:
         return cached[1][:limit]
@@ -2829,7 +2920,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="13.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="14.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -2914,7 +3005,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "13.0.0",
+        "app_version": "14.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -2947,7 +3038,7 @@ async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) ->
     record = await find_official_entity(name, [name])
     public_results = [] if record else await public_web_search(name, limit=5)
     return {
-        "app_version": "13.0.0",
+        "app_version": "14.0.0",
         "query": name,
         "direct_kb_topic": has_direct_kb_topic(name, hits),
         "kb_titles": [hit.get("title") for hit in hits],
@@ -2980,7 +3071,7 @@ async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) ->
             matched_gallery = gallery_url
             break
     return {
-        "app_version": "13.0.0",
+        "app_version": "14.0.0",
         "query": name,
         "official_record": {
             "name": record.get("name"),
@@ -3217,7 +3308,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "13.0.0",
+            "app_version": "14.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),
