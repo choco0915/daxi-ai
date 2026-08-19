@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#5b1f43"/><stop offset="100%" stop-color="#ef7d40"/></linearGradient></defs>
+  <rect width="800" height="480" fill="url(#g)"/>
+  <rect x="210" y="240" width="380" height="130" fill="#edd9be"/>
+  <polygon points="180,250 400,130 620,250" fill="#7d1935"/>
+  <polygon points="215,230 400,155 585,230" fill="#d7a54b"/>
+  <rect x="250" y="240" width="42" height="130" fill="#b56f38"/>
+  <rect x="354" y="240" width="42" height="130" fill="#b56f38"/>
+  <rect x="506" y="240" width="42" height="130" fill="#b56f38"/>
+  <circle cx="650" cy="92" r="42" fill="#ffd06a" opacity="0.88"/>
+  <rect x="0" y="370" width="800" height="110" fill="#391722"/>
+  <text x="58" y="85" fill="#fff8f1" font-size="40" font-weight="700" font-family="Noto Sans TC, Arial">普濟堂</text>
+  <text x="58" y="128" fill="#ffe6d1" font-size="24" font-family="Noto Sans TC, Arial">大溪信仰文化 × 六二四慶典核心</text>
+</svg>

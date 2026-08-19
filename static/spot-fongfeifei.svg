@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#512164"/><stop offset="100%" stop-color="#ff6ea8"/></linearGradient></defs>
+  <rect width="800" height="480" fill="url(#g)"/>
+  <circle cx="645" cy="95" r="45" fill="#ffdc80" opacity="0.92"/>
+  <rect x="208" y="164" width="385" height="210" rx="16" fill="#f9e7dc"/>
+  <rect x="238" y="192" width="110" height="110" rx="12" fill="#ffc6d8"/>
+  <circle cx="293" cy="232" r="28" fill="#7d3c53"/>
+  <path d="M267 274 C276 250, 311 250, 320 274" fill="#7d3c53"/>
+  <rect x="390" y="204" width="150" height="20" rx="10" fill="#a05071"/>
+  <rect x="390" y="248" width="120" height="16" rx="8" fill="#b86788"/>
+  <rect x="390" y="284" width="145" height="16" rx="8" fill="#b86788"/>
+  <text x="52" y="82" fill="#fff8ff" font-size="40" font-weight="700" font-family="Noto Sans TC, Arial">鳳飛飛故事館</text>
+  <text x="52" y="126" fill="#ffe9f5" font-size="24" font-family="Noto Sans TC, Arial">在地音樂記憶 × 文化故事</text>
+</svg>

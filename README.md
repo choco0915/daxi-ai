@@ -1,107 +1,92 @@
-# 光影大溪－AI 與智慧城市結合（公開部署版）
+# 光影大溪－豆干弟 AI 智慧導覽（正式作品展示版）
 
-這是一套以 `data.md` 為主要事實來源的 FastAPI + OpenAI RAG 大溪智慧導覽系統。
-此版本已調整為可部署到公開網路，不再只綁定 `127.0.0.1`。
+這是一套以 `data.md` 為主要知識來源的 FastAPI + OpenAI RAG 大溪智慧導覽網站，並針對公開展示加入豆干弟角色、動態光影背景、景點卡片、地圖導航、ArcGIS StoryMap 連結、回答來源標示、手機版介面與多輪對話記憶。
 
-## 專案結構
+## 主要功能
 
-- `app.py`：FastAPI、RAG、OpenAI 回答與公開站安全設定
-- `index.html`：聊天導覽前端
-- `data.md`：主要知識庫
-- `requirements.txt`：Python 套件
-- `render.yaml`：Render 公開部署設定
-- `Procfile`：其他支援 Procfile 的平台可使用
-- `.env.example`：本機環境變數範例
-- `test_rag.py`：RAG 基本測試
+- `data.md` Hybrid RAG：中文 2～4 字 n-gram TF-IDF、標題加權、口語查詢擴充。
+- 豆干弟導覽角色：回答直接進入內容，不使用「我在 data.md 找到資料」等機械式前言。
+- 多輪對話脈絡：前端會把最近數輪對話帶回後端，讓「那它呢？」「再幫我排一下」等追問更自然。
+- 回答來源標示：顯示本次命中的 `data.md` 分類與章節。
+- ArcGIS StoryMap：整合 `數位風華的光影刻痕`，並嘗試從 StoryMap 公開 item data 自動辨識「豆干弟」圖片作為頭像；若無法解析則使用本地備援頭像。
+- 動態光影背景：保留原始 blob 光影概念，增加紫、粉、藍、青、橙、黃、綠等色彩層次。
+- 景點卡片、Google Maps 導航與推薦行程卡片。
+- 響應式手機版 UI。
+- 公開網站基本保護：GZip、安全標頭、每 IP 聊天頻率限制。
 
-## 本機測試
+## 本地執行
 
-Windows Git Bash：
+### Windows Git Bash
 
 ```bash
 python -m venv .venv
 source .venv/Scripts/activate
 python -m pip install -r requirements.txt
 cp .env.example .env
+uvicorn app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-編輯 `.env`，填入新產生的 OpenAI API Key：
+瀏覽器開啟：
+
+```text
+http://127.0.0.1:8000/
+```
+
+## OpenAI 環境變數
+
+`.env`：
 
 ```env
 OPENAI_API_KEY=你的新_API_Key
 OPENAI_MODEL=gpt-5.6-luna
+CHAT_RATE_LIMIT=30
+CHAT_RATE_WINDOW_SECONDS=60
 ```
 
-啟動：
+不要把 `.env` 或真正的 API Key 上傳 GitHub。
 
-```bash
-uvicorn app:app --reload --host 127.0.0.1 --port 8000
-```
+## Render 公開部署
 
-本機瀏覽：`http://127.0.0.1:8000/`
+專案根目錄已包含 `render.yaml`，GitHub 更新後 Render 可自動重新部署。
 
-## 公開部署：Render（推薦）
-
-### 1. 上傳到 GitHub
-
-請把這個資料夾內的檔案放到一個 GitHub repository。`.env` 不可上傳；`.gitignore` 已排除它。
-
-如果已經在 Git repository：
-
-```bash
-git add .
-git commit -m "prepare public deployment"
-git push
-```
-
-### 2. 在 Render 建立 Blueprint
-
-1. 登入 Render。
-2. 選擇 `New` → `Blueprint`。
-3. 連接存放本專案的 GitHub repository。
-4. Render 會讀取專案根目錄的 `render.yaml`。
-5. 在要求 `OPENAI_API_KEY` 時填入真正的 Key；不要寫進 GitHub。
-6. 開始部署。
-
-部署成功後，Render 會提供類似：
+主要設定：
 
 ```text
-https://daxi-ai-guide.onrender.com
+Build Command: pip install -r requirements.txt
+Start Command: uvicorn app:app --host 0.0.0.0 --port $PORT
+Health Check: /health
 ```
 
-這個網址就能直接分享給其他人使用，不需要你的電腦持續開機。
+Render 的 Environment 中需要設定：
 
-## Render 設定已包含
+```text
+OPENAI_API_KEY
+OPENAI_MODEL
+CHAT_RATE_LIMIT
+CHAT_RATE_WINDOW_SECONDS
+```
 
-- Python Web Service
-- Singapore region
-- `pip install -r requirements.txt`
-- `uvicorn app:app --host 0.0.0.0 --port $PORT`
-- `/health` 健康檢查
-- Git commit 自動重新部署
-- `OPENAI_API_KEY` 使用雲端 Secret，而非寫在程式碼
-- 公開 `/chat` API 每 IP 基本限流
+## 豆干弟 StoryMap 頭像
 
-## 為什麼不能只把 127.0.0.1 改掉？
+前端會嘗試讀取：
 
-`127.0.0.1` 只代表自己的電腦。改成 `0.0.0.0` 只是讓伺服器接受外部連線；要真正讓全世界透過 HTTPS 存取，仍需要把程式部署到 Render、Railway、Fly.io、VPS 等具有公開網域與伺服器的環境。
+```text
+https://www.arcgis.com/sharing/rest/content/items/b704c98b362041c1be364ad2c8ca3d27/data?f=json
+```
 
-本專案的前端使用 `/chat`、`/init_topics` 等相對 URL，因此前後端部署在同一個 Render Web Service 時，不需要修改 API 網址，也不需要額外設定 CORS。
+並在公開 StoryMap 的圖片節點/資源中尋找含「豆干弟」相關標示的圖片。成功時網站上的主角頭像與 AI 對話頭像會自動換成 StoryMap 圖片。
 
-## 公開站安全提醒
+若 StoryMap 後續更換圖片 metadata、資源結構或限制跨網域讀取，網站會自動退回：
 
-公開網站的 `/chat` 會使用你的 OpenAI API 額度，因此不要把 `OPENAI_API_KEY` 放到 `index.html`、GitHub、README 或任何前端 JavaScript 中。本版 Key 僅從伺服器環境變數讀取，並加上基本每 IP 限流。
+```text
+static/dougan-di-fallback.svg
+```
 
-如果預期大量使用者，建議之後再加入登入、Cloudflare、Redis 集中式 rate limit、每日額度與伺服器監控。
+若希望 100% 固定使用某一張 StoryMap 豆干弟原圖，也可以把原圖另存成專案內的 `static/dougan-di.png`，再將 `index.html` 的 fallback 路徑改成該檔案。
 
-## RAG 測試
+## 測試
 
 ```bash
 python test_rag.py
+python check_public_ready.py
 ```
-
-## 健康檢查
-
-本機：`http://127.0.0.1:8000/health`
-
-公開部署後：`https://你的網域/health`

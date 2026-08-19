@@ -3,443 +3,762 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>大溪老街智慧導覽 - 豆干弟</title>
+    <title>光影大溪｜豆干弟 AI 智慧導覽</title>
     <style>
         :root {
-            --bg-dark: #0a0e14;
-            --panel: rgba(9, 15, 25, 0.72);
-            --glass: rgba(255, 255, 255, 0.06);
-            --border: rgba(255, 255, 255, 0.12);
-            --text-muted: rgba(255, 255, 255, 0.62);
-            --teal: #37e6c2;
-            --teal-soft: rgba(55, 230, 194, 0.16);
-            --blue-soft: rgba(77, 154, 255, 0.15);
+            --bg: #071019;
+            --panel: rgba(10, 18, 30, 0.82);
+            --panel-strong: rgba(10, 18, 30, 0.94);
+            --panel-soft: rgba(255, 255, 255, 0.07);
+            --border: rgba(255, 255, 255, 0.14);
+            --text: #f7fbff;
+            --muted: rgba(236, 246, 255, 0.72);
+            --teal: #30e6c9;
+            --teal-strong: #12d7b6;
+            --blue: #58a8ff;
+            --orange: #ffb34d;
+            --pink: #ff6ea8;
+            --bot-bubble: linear-gradient(180deg, rgba(31, 123, 255, 0.22) 0%, rgba(17, 98, 200, 0.16) 100%);
+            --user-bubble: linear-gradient(180deg, rgba(36, 213, 178, 0.34) 0%, rgba(17, 148, 127, 0.28) 100%);
+            --shadow: 0 16px 44px rgba(0, 0, 0, 0.26);
         }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        html,
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; }
         body {
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
             font-family: "Segoe UI", "Noto Sans TC", sans-serif;
-            color: #fff;
-            background: #070b12;
+            color: var(--text);
+            background: #071019;
+            overflow: hidden;
         }
 
-        button,
-        input {
-            font: inherit;
-        }
-
-        button:focus-visible,
-        input:focus-visible {
-            outline: 2px solid var(--teal);
-            outline-offset: 2px;
-        }
-
+        /* 保留最初版本的動態光影背景，並加上更多色彩層次 */
         .light-background {
             position: fixed;
             inset: 0;
             z-index: 0;
             overflow: hidden;
-            filter: blur(90px);
+            filter: blur(84px) saturate(1.18);
             pointer-events: none;
+            background: linear-gradient(180deg, #060b13 0%, #0b1422 100%);
         }
 
         .blob {
             position: absolute;
             border-radius: 50%;
-            opacity: 0.55;
-            animation: moveBlob 13s infinite alternate ease-in-out;
+            opacity: 0.52;
+            mix-blend-mode: screen;
+            animation: moveBlob 15s infinite alternate ease-in-out;
+            will-change: transform;
         }
 
-        .blob-1 {
-            top: 12%;
-            left: 16%;
-            width: 360px;
-            height: 360px;
-            background: radial-gradient(circle, #7928ca 0%, #ff0080 100%);
-        }
+        .blob-1 { top: 7%; left: 10%; width: 360px; height: 360px; background: radial-gradient(circle, #8b5cf6 0%, #ff2d95 58%, transparent 72%); }
+        .blob-2 { right: 8%; bottom: 10%; width: 430px; height: 430px; background: radial-gradient(circle, #0070f3 0%, #00e6d0 58%, transparent 72%); animation-delay: -4s; }
+        .blob-3 { top: 34%; left: 42%; width: 320px; height: 320px; background: radial-gradient(circle, #ff5e5b 0%, #ffc145 58%, transparent 72%); animation-delay: -8s; }
+        .blob-4 { top: 5%; right: 28%; width: 250px; height: 250px; background: radial-gradient(circle, #4ade80 0%, #14b8a6 60%, transparent 74%); animation-delay: -11s; }
+        .blob-5 { bottom: 2%; left: 25%; width: 300px; height: 300px; background: radial-gradient(circle, #f472b6 0%, #7c3aed 58%, transparent 74%); animation-delay: -6s; }
+        .blob-6 { top: 45%; right: 2%; width: 240px; height: 240px; background: radial-gradient(circle, #60a5fa 0%, #22d3ee 55%, transparent 74%); animation-delay: -13s; }
 
-        .blob-2 {
-            right: 16%;
-            bottom: 14%;
-            width: 420px;
-            height: 420px;
-            background: radial-gradient(circle, #0070f3 0%, #00dfd8 100%);
-            animation-delay: -4s;
+        .light-streak {
+            position: absolute;
+            width: 48vw;
+            height: 8vw;
+            min-height: 80px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.16), transparent);
+            transform: rotate(-20deg);
+            opacity: 0.22;
+            animation: driftStreak 18s ease-in-out infinite alternate;
         }
-
-        .blob-3 {
-            top: 38%;
-            left: 46%;
-            width: 280px;
-            height: 280px;
-            background: radial-gradient(circle, #ff4d4d 0%, #f9cb28 100%);
-            animation-delay: -8s;
-        }
+        .streak-1 { top: 18%; left: -10%; }
+        .streak-2 { bottom: 12%; right: -8%; transform: rotate(18deg); animation-delay: -7s; }
 
         @keyframes moveBlob {
-            0% { transform: translate(0, 0) scale(1); }
-            40% { transform: translate(55px, -65px) scale(1.1); }
-            75% { transform: translate(-45px, 40px) scale(0.92); }
-            100% { transform: translate(0, 0) scale(1); }
+            0% { transform: translate3d(0, 0, 0) scale(1); }
+            35% { transform: translate3d(70px, -55px, 0) scale(1.12); }
+            70% { transform: translate3d(-42px, 52px, 0) scale(0.94); }
+            100% { transform: translate3d(22px, -18px, 0) scale(1.04); }
         }
 
-        .header-bar {
+        @keyframes driftStreak {
+            from { transform: translateX(-3vw) rotate(-20deg); opacity: 0.12; }
+            to { transform: translateX(14vw) rotate(-14deg); opacity: 0.28; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .blob, .light-streak { animation: none !important; }
+        }
+
+        a { color: inherit; text-decoration: none; }
+        button, input, textarea { font: inherit; }
+        button { cursor: pointer; }
+        button:focus-visible,
+        a:focus-visible,
+        input:focus-visible {
+            outline: 2px solid var(--teal);
+            outline-offset: 2px;
+        }
+
+        .shell {
             position: relative;
-            z-index: 2;
-            height: 62px;
+            z-index: 1;
+            display: grid;
+            grid-template-rows: 68px 1fr;
+            height: 100%;
+        }
+
+        .header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 28px;
-            background: rgba(7, 11, 18, 0.9);
+            gap: 16px;
+            padding: 0 22px;
+            background: rgba(5, 10, 18, 0.74);
             border-bottom: 1px solid var(--border);
             backdrop-filter: blur(16px);
         }
 
-        .brand {
-            font-size: 18px;
-            font-weight: 750;
-            letter-spacing: 0.02em;
-        }
-
-        .kb-badge {
-            font-size: 12px;
-            color: var(--teal);
-            padding: 6px 10px;
-            border: 1px solid rgba(55, 230, 194, 0.35);
-            border-radius: 999px;
-            background: var(--teal-soft);
-        }
-
-        .app-layout {
-            position: relative;
-            z-index: 1;
+        .header-left {
             display: flex;
-            height: calc(100vh - 62px);
+            align-items: center;
+            gap: 12px;
+        }
+
+        .menu-btn {
+            display: none;
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.06);
+            color: var(--text);
+        }
+
+        .brand-wrap { display: flex; flex-direction: column; gap: 2px; }
+        .brand-title { font-size: 20px; font-weight: 800; letter-spacing: 0.02em; }
+        .brand-subtitle { font-size: 12px; color: var(--muted); }
+
+        .header-actions { display: flex; align-items: center; gap: 10px; }
+        .pill-btn,
+        .header-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 40px;
+            padding: 0 14px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.06);
+            color: var(--text);
+            font-size: 14px;
+            font-weight: 700;
+            transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+        }
+
+        .pill-btn:hover,
+        .header-link:hover {
+            transform: translateY(-1px);
+            background: rgba(255,255,255,0.1);
+            border-color: rgba(255,255,255,0.22);
+        }
+
+        .header-link.primary,
+        .send-btn {
+            border-color: rgba(48, 230, 201, 0.45);
+            background: linear-gradient(135deg, rgba(18, 215, 182, 0.92), rgba(72, 153, 255, 0.88));
+            color: #031016;
+            box-shadow: 0 10px 24px rgba(18, 215, 182, 0.22);
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 270px minmax(0, 1fr) 360px;
+            gap: 18px;
+            padding: 18px;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(18px);
+            min-height: 0;
         }
 
         .sidebar {
-            width: 270px;
-            flex: 0 0 270px;
             display: flex;
             flex-direction: column;
-            padding: 18px;
-            background: rgba(0, 0, 0, 0.34);
-            border-right: 1px solid var(--border);
-            backdrop-filter: blur(20px);
+            padding: 16px;
+            overflow: hidden;
+        }
+
+        .guide-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            color: #d9fffa;
+            background: rgba(48, 230, 201, 0.14);
+            border: 1px solid rgba(48, 230, 201, 0.26);
+            margin-bottom: 14px;
         }
 
         .new-chat-btn {
             width: 100%;
-            border: 1px solid rgba(55, 230, 194, 0.4);
-            border-radius: 10px;
-            padding: 11px 12px;
-            background: var(--teal-soft);
-            color: #fff;
-            cursor: pointer;
-            font-weight: 700;
-            transition: 0.2s ease;
+            min-height: 44px;
+            border-radius: 14px;
+            border: 1px solid rgba(48, 230, 201, 0.35);
+            background: rgba(48, 230, 201, 0.14);
+            color: var(--text);
+            font-weight: 800;
+            margin-bottom: 14px;
         }
 
-        .new-chat-btn:hover {
-            background: rgba(55, 230, 194, 0.28);
-        }
-
-        .history-title {
-            margin: 18px 4px 9px;
-            color: var(--text-muted);
+        .section-label {
+            color: var(--muted);
             font-size: 12px;
+            font-weight: 700;
             letter-spacing: 0.08em;
+            margin: 8px 4px 10px;
+            text-transform: uppercase;
         }
 
-        .history-list {
-            flex: 1;
-            overflow-y: auto;
-            min-height: 0;
-        }
+        .history-list { flex: 1; min-height: 0; overflow-y: auto; }
 
         .history-item {
             display: flex;
             align-items: center;
-            gap: 6px;
-            margin-bottom: 6px;
-            padding: 8px 8px 8px 10px;
+            gap: 8px;
+            padding: 10px;
+            border-radius: 14px;
             border: 1px solid transparent;
-            border-radius: 9px;
-            background: rgba(255, 255, 255, 0.035);
+            background: rgba(255,255,255,0.035);
+            margin-bottom: 8px;
         }
 
         .history-item.active {
-            border-color: rgba(55, 230, 194, 0.3);
-            background: rgba(55, 230, 194, 0.1);
+            background: rgba(48, 230, 201, 0.12);
+            border-color: rgba(48, 230, 201, 0.26);
         }
 
         .history-name {
             flex: 1;
             min-width: 0;
+            white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            white-space: nowrap;
-            color: #f2f7fa;
+            font-size: 14px;
             cursor: pointer;
+        }
+
+        .item-actions { display: flex; gap: 4px; }
+        .action-btn {
+            width: 28px; height: 28px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: var(--muted);
+        }
+        .action-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+
+        .status-bar {
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--muted);
             font-size: 13px;
         }
 
-        .item-actions {
-            display: flex;
-            gap: 2px;
-        }
-
-        .action-btn {
-            width: 26px;
-            height: 26px;
-            border: none;
-            border-radius: 6px;
-            background: transparent;
-            color: #9aa6b2;
-            cursor: pointer;
-        }
-
-        .action-btn:hover {
-            color: #fff;
-            background: rgba(255, 255, 255, 0.08);
-        }
-
-        .status-container {
-            display: flex;
-            align-items: center;
-            gap: 9px;
-            min-height: 48px;
-            padding-top: 12px;
-            border-top: 1px solid var(--border);
-            color: var(--text-muted);
-            font-size: 12px;
-        }
-
         .spinner {
-            display: none;
-            width: 18px;
-            height: 18px;
-            border: 3px solid rgba(255, 255, 255, 0.12);
-            border-top-color: var(--teal);
+            width: 18px; height: 18px;
             border-radius: 50%;
-            animation: spin 0.8s linear infinite;
+            border: 3px solid rgba(255,255,255,0.14);
+            border-top-color: var(--teal);
+            animation: spin 0.9s linear infinite;
+            display: none;
         }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .main-chat {
-            flex: 1;
-            min-width: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            padding: 26px clamp(18px, 4vw, 54px) 22px;
-        }
-
-        .chat-messages {
-            flex: 1;
+        .chat-panel {
+            display: grid;
+            grid-template-rows: auto auto 1fr auto auto;
             min-height: 0;
-            overflow-y: auto;
-            scroll-behavior: smooth;
-            padding: 2px 2px 10px;
+            padding: 18px;
+            gap: 14px;
         }
 
-        .welcome-section {
-            max-width: 760px;
-            margin: 8vh auto 0;
-            text-align: center;
-            padding: 28px;
+        .hero {
+            display: grid;
+            grid-template-columns: 96px 1fr;
+            gap: 18px;
+            padding: 18px;
+            border-radius: 22px;
+            background: linear-gradient(135deg, rgba(24, 40, 69, 0.95) 0%, rgba(13, 93, 111, 0.85) 100%);
+            border: 1px solid rgba(255,255,255,0.12);
+            overflow: hidden;
+            position: relative;
         }
 
-        .welcome-section h1 {
-            margin-bottom: 10px;
-            font-size: clamp(26px, 4vw, 38px);
-            background: linear-gradient(135deg, #51efca 0%, #65c8ff 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+        .hero::after {
+            content: "";
+            position: absolute;
+            inset: auto -60px -60px auto;
+            width: 180px;
+            height: 180px;
+            background: radial-gradient(circle, rgba(255,255,255,0.18) 0%, transparent 70%);
+            pointer-events: none;
         }
 
-        .welcome-section p {
-            color: var(--text-muted);
-            line-height: 1.7;
+        .guide-avatar-large {
+            width: 96px; height: 96px;
+            border-radius: 28px;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+            background: linear-gradient(135deg, #ffb347 0%, #ff6e6e 100%);
+            border: 2px solid rgba(255,255,255,0.28);
+            box-shadow: 0 14px 28px rgba(0,0,0,0.22), 0 0 28px rgba(255, 110, 168, 0.22);
         }
 
-        .quick-buttons,
-        .recommend-box {
+        .dougan-avatar-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            background: rgba(255,255,255,0.06);
+        }
+
+        .hero-title { font-size: clamp(26px, 3.2vw, 34px); font-weight: 900; margin-bottom: 8px; }
+        .hero-desc {
+            font-size: 15px;
+            line-height: 1.8;
+            color: rgba(248, 252, 255, 0.88);
+            margin-bottom: 14px;
+        }
+
+        .hero-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .hero-metrics {
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
         }
 
-        .quick-buttons {
-            justify-content: center;
-            margin-top: 22px;
+        .metric-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 12px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.14);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .welcome-container:empty { display: none; }
+
+        .quick-buttons,
+        .recommend-box {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
         }
 
         .quick-btn,
         .rec-btn {
-            border: 1px solid rgba(55, 230, 194, 0.34);
+            padding: 10px 14px;
             border-radius: 999px;
-            padding: 8px 12px;
-            background: rgba(55, 230, 194, 0.1);
-            color: #a8f7e5;
-            cursor: pointer;
-            font-size: 13px;
-            transition: 0.18s ease;
+            border: 1px solid rgba(48, 230, 201, 0.28);
+            background: rgba(48, 230, 201, 0.12);
+            color: #ddfffb;
+            font-size: 14px;
+            font-weight: 700;
         }
 
         .quick-btn:hover,
         .rec-btn:hover {
-            transform: translateY(-1px);
-            background: rgba(55, 230, 194, 0.22);
-            color: #fff;
+            background: rgba(48, 230, 201, 0.22);
+        }
+
+        .chat-window {
+            min-height: 0;
+            overflow-y: auto;
+            padding: 4px 4px 12px;
         }
 
         .message {
             display: flex;
+            gap: 12px;
+            align-items: flex-start;
             margin-bottom: 18px;
         }
 
-        .message.user {
-            justify-content: flex-end;
+        .message.user { justify-content: flex-end; }
+        .message.user .message-inner { flex-direction: row-reverse; }
+
+        .message-inner {
+            max-width: min(880px, 100%);
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
         }
 
-        .message.bot {
-            justify-content: flex-start;
+        .avatar {
+            width: 46px; height: 46px;
+            flex: 0 0 46px;
+            border-radius: 16px;
+            display: grid;
+            place-items: center;
+            font-size: 22px;
+            font-weight: 900;
+            box-shadow: 0 10px 24px rgba(0,0,0,0.18);
+        }
+
+        .avatar.bot {
+            background: linear-gradient(135deg, #ffb347 0%, #ff6ea8 100%);
+            color: #2d1100;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.22);
+        }
+
+        .avatar.bot img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .avatar.user {
+            background: linear-gradient(135deg, #6ff1dd 0%, #58a8ff 100%);
+            color: #01253a;
+            font-size: 16px;
+        }
+
+        .bubble-wrap { min-width: 0; }
+        .message-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
         }
 
         .bubble {
-            max-width: min(760px, 78%);
-            padding: 14px 17px;
-            border: 1px solid var(--border);
-            border-radius: 17px;
-            background: var(--glass);
-            backdrop-filter: blur(12px);
-            white-space: pre-wrap;
+            max-width: min(760px, 78vw);
+            padding: 16px 18px;
+            border-radius: 22px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: var(--bot-bubble);
+            box-shadow: 0 12px 24px rgba(0,0,0,0.12);
             overflow-wrap: anywhere;
-            line-height: 1.7;
         }
 
         .user .bubble {
-            border-color: rgba(55, 230, 194, 0.3);
-            background: rgba(29, 177, 150, 0.25);
+            background: var(--user-bubble);
+            border-color: rgba(48, 230, 201, 0.28);
         }
+
+        .message-text {
+            color: #f7fbff;
+            font-size: 17px;
+            font-weight: 540;
+            line-height: 1.85;
+        }
+
+        .message-text .rich-heading {
+            display: block;
+            margin: 6px 0 10px;
+            font-size: 18px;
+            font-weight: 900;
+            color: #ffffff;
+        }
+
+        .message-text p { margin: 0 0 12px; }
+        .message-text ul {
+            margin: 4px 0 12px 1.2em;
+            padding-left: 0.4em;
+        }
+        .message-text li { margin-bottom: 8px; }
+        .message-text strong { font-weight: 850; color: #ffffff; }
 
         .source-row {
             display: flex;
             flex-wrap: wrap;
-            gap: 6px;
-            margin-top: 11px;
-            padding-top: 10px;
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            gap: 8px;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.1);
         }
 
         .source-chip,
-        .mode-chip {
+        .mode-chip,
+        .story-chip {
             display: inline-flex;
             align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
             border-radius: 999px;
-            padding: 4px 8px;
-            font-size: 11px;
-        }
-
-        .source-chip {
-            color: #b7d7ff;
-            background: var(--blue-soft);
-            border: 1px solid rgba(77, 154, 255, 0.22);
-        }
-
-        .mode-chip {
-            color: #a8f7e5;
-            background: var(--teal-soft);
-            border: 1px solid rgba(55, 230, 194, 0.22);
-        }
-
-        .recommend-area {
-            min-height: 34px;
-        }
-
-        .recommend-box {
-            justify-content: flex-end;
-        }
-
-        .input-area {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 11px 10px 17px;
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            background: rgba(9, 15, 25, 0.74);
-            backdrop-filter: blur(18px);
-        }
-
-        .input-area input {
-            flex: 1;
-            min-width: 0;
-            padding: 7px 0;
-            border: none;
-            outline: none;
-            background: transparent;
-            color: #fff;
-            font-size: 15px;
-        }
-
-        .input-area input::placeholder {
-            color: rgba(255, 255, 255, 0.38);
-        }
-
-        .send-btn {
-            border: 1px solid rgba(55, 230, 194, 0.38);
-            border-radius: 10px;
-            padding: 9px 14px;
-            background: rgba(55, 230, 194, 0.16);
-            color: #fff;
-            cursor: pointer;
+            font-size: 12px;
             font-weight: 700;
         }
 
-        .send-btn:disabled {
-            cursor: not-allowed;
-            opacity: 0.45;
+        .source-chip {
+            background: rgba(88, 168, 255, 0.18);
+            border: 1px solid rgba(88, 168, 255, 0.24);
+            color: #d7eaff;
         }
 
-        @media (max-width: 760px) {
-            .header-bar {
-                padding: 0 16px;
-            }
+        .mode-chip {
+            background: rgba(48, 230, 201, 0.16);
+            border: 1px solid rgba(48, 230, 201, 0.24);
+            color: #dbfffa;
+        }
 
-            .kb-badge {
-                display: none;
+        .story-chip {
+            background: rgba(255, 179, 77, 0.16);
+            border: 1px solid rgba(255, 179, 77, 0.24);
+            color: #ffeccc;
+        }
+
+        .recommend-area { min-height: 46px; }
+
+        .input-area {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 22px;
+            border: 1px solid var(--border);
+            background: var(--panel-strong);
+        }
+
+        .input-area input {
+            min-width: 0;
+            border: none;
+            outline: none;
+            background: transparent;
+            color: var(--text);
+            padding: 8px 4px 8px 8px;
+            font-size: 16px;
+        }
+
+        .input-area input::placeholder { color: rgba(255,255,255,0.42); }
+        .send-btn {
+            min-width: 120px;
+            border: none;
+            border-radius: 16px;
+            font-weight: 900;
+            padding: 0 18px;
+        }
+        .send-btn:disabled { opacity: 0.65; cursor: not-allowed; }
+
+        .showcase-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            padding: 16px;
+            overflow: hidden;
+        }
+
+        .scroll-area {
+            overflow-y: auto;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            padding-right: 2px;
+        }
+
+        .guide-card,
+        .story-card,
+        .section-card,
+        .spot-card,
+        .route-card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+        }
+
+        .guide-card {
+            padding: 16px;
+            display: grid;
+            grid-template-columns: 64px 1fr;
+            gap: 14px;
+        }
+
+        .guide-avatar {
+            width: 64px;
+            height: 64px;
+            border-radius: 20px;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+            background: linear-gradient(135deg, #ffb347 0%, #ff6ea8 100%);
+            border: 1px solid rgba(255,255,255,0.24);
+        }
+
+        .guide-card h3 { font-size: 18px; font-weight: 900; margin-bottom: 4px; }
+        .guide-card p { font-size: 14px; color: var(--muted); line-height: 1.75; }
+
+        .story-card {
+            padding: 16px;
+            background: linear-gradient(135deg, rgba(88, 168, 255, 0.2), rgba(255, 110, 168, 0.14));
+        }
+
+        .story-card h3 { font-size: 18px; font-weight: 900; margin-bottom: 8px; }
+        .story-card p { font-size: 14px; color: rgba(255,255,255,0.82); line-height: 1.75; margin-bottom: 12px; }
+
+        .card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .mini-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            min-height: 38px;
+            padding: 0 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.14);
+            background: rgba(255,255,255,0.08);
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 800;
+        }
+
+        .spot-grid,
+        .route-grid {
+            display: grid;
+            gap: 12px;
+        }
+
+        .spot-card { overflow: hidden; }
+        .spot-image {
+            width: 100%;
+            height: 148px;
+            object-fit: cover;
+            display: block;
+            background: #142031;
+        }
+
+        .spot-body,
+        .route-body {
+            padding: 14px;
+        }
+
+        .spot-body h4,
+        .route-body h4 {
+            font-size: 16px;
+            font-weight: 900;
+            margin-bottom: 8px;
+        }
+
+        .spot-body p,
+        .route-body p {
+            font-size: 14px;
+            color: var(--muted);
+            line-height: 1.75;
+            margin-bottom: 10px;
+        }
+
+        .route-card {
+            background: linear-gradient(180deg, rgba(48, 230, 201, 0.08), rgba(255,255,255,0.04));
+        }
+
+        .helper-note {
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.45);
+            z-index: 10;
+        }
+
+        @media (max-width: 1380px) {
+            .layout { grid-template-columns: 250px minmax(0, 1fr) 330px; }
+        }
+
+        @media (max-width: 1180px) {
+            .layout {
+                grid-template-columns: 1fr 320px;
             }
 
             .sidebar {
-                display: none;
+                position: fixed;
+                top: 68px;
+                left: 18px;
+                bottom: 18px;
+                width: min(300px, calc(100vw - 36px));
+                z-index: 20;
+                transform: translateX(-120%);
+                transition: transform 0.24s ease;
             }
 
-            .main-chat {
-                padding: 18px 12px 14px;
+            body.show-sidebar .sidebar { transform: translateX(0); }
+            body.show-sidebar .overlay { display: block; }
+            .menu-btn { display: inline-grid; place-items: center; }
+        }
+
+        @media (max-width: 980px) {
+            .layout {
+                grid-template-columns: 1fr;
+                overflow-y: auto;
+                align-items: start;
             }
 
-            .bubble {
-                max-width: 90%;
+            .chat-panel,
+            .showcase-panel {
+                min-height: auto;
             }
 
-            .recommend-box {
-                justify-content: flex-start;
+            .showcase-panel {
+                order: 3;
             }
+
+            .chat-window { min-height: 420px; }
+            .hero { grid-template-columns: 72px 1fr; }
+            .guide-avatar-large { width: 72px; height: 72px; font-size: 34px; border-radius: 22px; }
+        }
+
+        @media (max-width: 720px) {
+            .shell { grid-template-rows: auto 1fr; }
+            .header {
+                padding: 12px 14px;
+                align-items: flex-start;
+                gap: 12px;
+                flex-wrap: wrap;
+            }
+            .header-actions { width: 100%; flex-wrap: wrap; }
+            .layout { padding: 12px; gap: 12px; }
+            .hero { grid-template-columns: 1fr; }
+            .chat-panel { padding: 14px; }
+            .showcase-panel { padding: 14px; }
+            .message-inner { max-width: 100%; }
+            .bubble { max-width: min(100%, 100vw); }
+            .input-area { grid-template-columns: 1fr; }
+            .send-btn { min-height: 48px; }
+            .header-link, .pill-btn { flex: 1 1 auto; }
         }
     </style>
 </head>
@@ -448,46 +767,129 @@
         <div class="blob blob-1"></div>
         <div class="blob blob-2"></div>
         <div class="blob blob-3"></div>
+        <div class="blob blob-4"></div>
+        <div class="blob blob-5"></div>
+        <div class="blob blob-6"></div>
+        <div class="light-streak streak-1"></div>
+        <div class="light-streak streak-2"></div>
     </div>
-
-    <header class="header-bar">
-        <div class="brand">光影大溪－AI 與智慧城市結合</div>
-        <div class="kb-badge">data.md RAG 知識庫</div>
-    </header>
-
-    <div class="app-layout">
-        <aside class="sidebar">
-            <button class="new-chat-btn" id="new-chat-btn" type="button">＋ 新增對話</button>
-            <div class="history-title">對話紀錄</div>
-            <div class="history-list" id="history-list"></div>
-            <div class="status-container" aria-live="polite">
-                <div class="spinner" id="spinner"></div>
-                <span id="status-text">豆干弟隨時待命</span>
+    <div class="overlay" id="overlay"></div>
+    <div class="shell">
+        <header class="header">
+            <div class="header-left">
+                <button class="menu-btn" id="menu-btn" type="button" aria-label="切換側邊欄">☰</button>
+                <div class="brand-wrap">
+                    <div class="brand-title">🏮 光影大溪・豆干弟 AI 導覽</div>
+                    <div class="brand-subtitle">正式作品展示版｜智慧導覽 × 故事地圖 × 大溪旅遊靈感</div>
+                </div>
             </div>
-        </aside>
-
-        <main class="main-chat">
-            <div class="chat-messages" id="chat-messages"></div>
-            <div id="welcome-container"></div>
-            <div class="recommend-area" id="rec-container"></div>
-            <div class="input-area">
-                <input
-                    id="user-input"
-                    type="text"
-                    maxlength="500"
-                    autocomplete="off"
-                    placeholder="問我大溪景點、美食、六二四、交通或旅遊路線…"
-                    aria-label="輸入大溪導覽問題"
-                >
-                <button class="send-btn" id="send-btn" type="button">發送</button>
+            <div class="header-actions">
+                <a class="header-link" href="https://www.google.com/maps/search/?api=1&query=%E5%A4%A7%E6%BA%AA%E8%80%81%E8%A1%97" target="_blank" rel="noopener noreferrer">🗺️ 地圖導航</a>
+                <a class="header-link primary" href="https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27" target="_blank" rel="noopener noreferrer">✨ 故事地圖</a>
             </div>
-        </main>
+        </header>
+
+        <div class="layout">
+            <aside class="panel sidebar" id="sidebar">
+                <div class="guide-badge">🤖 豆干弟導覽中｜對話記憶已啟用</div>
+                <button class="new-chat-btn" id="new-chat-btn" type="button">＋ 開始新對話</button>
+                <div class="section-label">對話紀錄</div>
+                <div class="history-list" id="history-list"></div>
+                <div class="status-bar">
+                    <div class="spinner" id="spinner"></div>
+                    <span id="status-text">豆干弟隨時待命</span>
+                </div>
+            </aside>
+
+            <main class="panel chat-panel">
+                <section class="hero">
+                    <div class="guide-avatar-large"><img class="dougan-avatar-img" data-dougan-avatar src="/static/dougan-di-fallback.svg" alt="大溪豆干弟"></div>
+                    <div>
+                        <h1 class="hero-title">跟著豆干弟，一起逛大溪老街</h1>
+                        <p class="hero-desc">
+                            我會用 <strong>豆干弟</strong> 的角色陪你導覽大溪，回答會盡量根據 <strong>data.md</strong> 的知識內容來整理，並搭配景點卡片、行程靈感、故事地圖與地圖導航，讓網站更像正式作品展示頁。
+                        </p>
+                        <div class="hero-actions">
+                            <button class="pill-btn" type="button" data-ask="第一次來大溪怎麼安排半日遊？">🧭 問半日遊</button>
+                            <button class="pill-btn" type="button" data-ask="大溪有哪些必吃美食？">🍴 問美食</button>
+                            <button class="pill-btn" type="button" data-ask="大溪老街的巴洛克建築有什麼特色？">🏛️ 問建築</button>
+                        </div>
+                        <div class="hero-metrics">
+                            <span class="metric-chip">📚 data.md 為主要事實來源</span>
+                            <span class="metric-chip">🧠 對話脈絡記憶</span>
+                            <span class="metric-chip">🔗 ArcGIS StoryMap 連結</span>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="welcome-container" id="welcome-container"></section>
+                <div class="chat-window" id="chat-messages"></div>
+                <div class="recommend-area" id="rec-container"></div>
+
+                <div class="input-area">
+                    <input
+                        id="user-input"
+                        type="text"
+                        placeholder="例如：大溪老街建築特色是什麼？或幫我安排雨天行程"
+                        autocomplete="off"
+                        maxlength="500"
+                    >
+                    <button class="send-btn" id="send-btn" type="button">送出提問</button>
+                </div>
+            </main>
+
+            <aside class="panel showcase-panel">
+                <div class="scroll-area">
+                    <section class="guide-card">
+                        <div class="guide-avatar"><img class="dougan-avatar-img" data-dougan-avatar src="/static/dougan-di-fallback.svg" alt="大溪豆干弟"></div>
+                        <div>
+                            <h3>豆干弟上線</h3>
+                            <p>從老街歷史、六二四、木藝文化到美食路線，我會用比較親切的導覽口吻陪你認識大溪，也會在回答底下標示這次參考到的章節來源。</p>
+                        </div>
+                    </section>
+
+                    <section class="story-card">
+                        <h3>✨ 連結故事地圖</h3>
+                        <p>網站已經串接到 ArcGIS StoryMap《數位風華的光影刻痕》，如果你想看更多圖文敘事與空間脈絡，可以直接從這裡延伸閱讀。</p>
+                        <div class="card-actions">
+                            <a class="mini-btn" href="https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27" target="_blank" rel="noopener noreferrer">🔗 開啟 StoryMap</a>
+                            <button class="mini-btn" type="button" data-ask="可以介紹這個故事地圖和大溪老街有什麼關聯嗎？">💬 問豆干弟</button>
+                        </div>
+                    </section>
+
+                    <section class="section-card spot-section">
+                        <div class="spot-body">
+                            <h4>📍 景點精選</h4>
+                            <p>把常見的必訪景點整理成展示卡片，方便直接瀏覽，也能一鍵開導航或延伸詢問。</p>
+                        </div>
+                        <div class="spot-grid" id="spot-grid"></div>
+                    </section>
+
+                    <section class="section-card route-section">
+                        <div class="route-body">
+                            <h4>🗺️ 推薦行程卡片</h4>
+                            <p>用卡片方式展示半日遊、一日遊與雨天備案，讓網站更像完整作品，而不只是單純聊天視窗。</p>
+                        </div>
+                        <div class="route-grid" id="route-grid"></div>
+                    </section>
+
+                    <div class="helper-note">
+                        小提醒：豆干弟會盡量根據目前 <strong>data.md</strong> 的內容回答；如果資料庫沒有寫到的資訊，我會直接跟你說資料不足，不會自己亂補。
+                    </div>
+                </div>
+            </aside>
+        </div>
     </div>
 
     <script>
         "use strict";
 
-        const STORAGE_KEY = "daxi-ai-chats-v2";
+        const STORAGE_KEY = "daxi-ai-chats-v3";
+        const STORYMAP_URL = "https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27";
+        const STORYMAP_ITEM_ID = "b704c98b362041c1be364ad2c8ca3d27";
+        const STORYMAP_DATA_URL = `https://www.arcgis.com/sharing/rest/content/items/${STORYMAP_ITEM_ID}/data?f=json`;
+        const STORYMAP_RESOURCE_BASE = `https://www.arcgis.com/sharing/rest/content/items/${STORYMAP_ITEM_ID}/resources/`;
+        const AVATAR_CACHE_KEY = "daxi-storymap-dougan-avatar-v1";
         const QUICK_QUESTIONS = [
             "大溪老街有什麼歷史特色？",
             "大溪有哪些必吃美食？",
@@ -495,6 +897,65 @@
             "第一次來大溪怎麼安排半日遊？",
             "大溪老街的巴洛克建築有什麼特色？",
             "開車去大溪老街可以停哪裡？"
+        ];
+
+        const SPOTS = [
+            {
+                title: "大溪老街",
+                description: "從和平路、中正路到中山路，是最能感受巴洛克街屋與在地美食氛圍的核心區域。",
+                image: "/static/spot-oldstreet.svg",
+                mapUrl: "https://www.google.com/maps/search/?api=1&query=%E5%A4%A7%E6%BA%AA%E8%80%81%E8%A1%97",
+                ask: "可以介紹一下大溪老街的特色嗎？"
+            },
+            {
+                title: "普濟堂",
+                description: "大溪重要信仰中心，也是六月二十四慶典的重要核心場域。",
+                image: "/static/spot-temple.svg",
+                mapUrl: "https://www.google.com/maps/search/?api=1&query=%E6%99%AE%E6%BF%9F%E5%A0%82+%E5%A4%A7%E6%BA%AA",
+                ask: "普濟堂和六月二十四有什麼關係？"
+            },
+            {
+                title: "大溪橋",
+                description: "跨越大漢溪的地標景點，也是欣賞夕陽與河谷景觀的人氣拍照點。",
+                image: "/static/spot-bridge.svg",
+                mapUrl: "https://www.google.com/maps/search/?api=1&query=%E5%A4%A7%E6%BA%AA%E6%A9%8B",
+                ask: "大溪橋有什麼看點？"
+            },
+            {
+                title: "木藝生態博物館",
+                description: "從武德殿、公會堂到在地木藝店家，串起大溪的木藝職人故事。",
+                image: "/static/spot-museum.svg",
+                mapUrl: "https://www.google.com/maps/search/?api=1&query=%E5%A4%A7%E6%BA%AA%E6%9C%A8%E8%97%9D%E7%94%9F%E6%85%8B%E5%8D%9A%E7%89%A9%E9%A4%A8",
+                ask: "大溪木藝生態博物館有什麼特色？"
+            },
+            {
+                title: "鳳飛飛故事館",
+                description: "想認識大溪代表性的在地音樂文化，這裡很適合作為延伸站點。",
+                image: "/static/spot-fongfeifei.svg",
+                mapUrl: "https://www.google.com/maps/search/?api=1&query=%E9%B3%B3%E9%A3%9B%E9%A3%9B%E6%95%85%E4%BA%8B%E9%A4%A8",
+                ask: "可以介紹鳳飛飛故事館嗎？"
+            }
+        ];
+
+        const ROUTES = [
+            {
+                title: "半日散策",
+                summary: "大溪老街 → 普濟堂 → 中正公園 → 大溪橋，適合第一次到訪快速認識大溪。",
+                ask: "第一次來大溪怎麼安排半日遊？",
+                mapUrl: "https://www.google.com/maps/search/?api=1&query=%E5%A4%A7%E6%BA%AA%E8%80%81%E8%A1%97"
+            },
+            {
+                title: "歷史文化一日遊",
+                summary: "上午走老街和小吃，下午串連武德殿、公會堂、鳳飛飛故事館與木藝館舍。",
+                ask: "可以幫我安排大溪歷史文化一日遊嗎？",
+                mapUrl: "https://www.google.com/maps/search/?api=1&query=%E5%A4%A7%E6%BA%AA%E6%9C%A8%E8%97%9D%E7%94%9F%E6%85%8B%E5%8D%9A%E7%89%A9%E9%A4%A8"
+            },
+            {
+                title: "雨天備案",
+                summary: "雨天可把重心放在武德殿、公會堂、鳳飛飛故事館和木藝店家等室內場域。",
+                ask: "如果下雨，去大溪可以怎麼玩？",
+                mapUrl: "https://www.google.com/maps/search/?api=1&query=%E6%AD%A6%E5%BE%B7%E6%AE%BF+%E5%A4%A7%E6%BA%AA"
+            }
         ];
 
         const historyList = document.getElementById("history-list");
@@ -505,6 +966,10 @@
         const sendButton = document.getElementById("send-btn");
         const spinner = document.getElementById("spinner");
         const statusText = document.getElementById("status-text");
+        const menuButton = document.getElementById("menu-btn");
+        const overlay = document.getElementById("overlay");
+        const spotGrid = document.getElementById("spot-grid");
+        const routeGrid = document.getElementById("route-grid");
 
         let chats = loadChats();
         let currentChatId = null;
@@ -530,6 +995,10 @@
             return `chat_${Date.now()}_${Math.random().toString(16).slice(2)}`;
         }
 
+        function nowTime() {
+            return new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
+        }
+
         function setBusy(busy, message = "豆干弟隨時待命") {
             isSending = busy;
             spinner.style.display = busy ? "block" : "none";
@@ -537,6 +1006,9 @@
             userInput.disabled = busy;
             statusText.textContent = message;
         }
+
+        function closeSidebar() { document.body.classList.remove("show-sidebar"); }
+        function toggleSidebar() { document.body.classList.toggle("show-sidebar"); }
 
         function startNewChat() {
             const id = makeChatId();
@@ -552,114 +1024,218 @@
             showWelcome();
             fetchInitTopics();
             userInput.focus();
+            closeSidebar();
         }
 
         function showWelcome() {
             welcomeContainer.replaceChildren();
+            const wrapper = document.createElement("div");
 
-            const section = document.createElement("section");
-            section.className = "welcome-section";
-
-            const title = document.createElement("h1");
-            title.textContent = "🏮 大溪小導遊・豆干弟";
-
-            const description = document.createElement("p");
-            description.textContent = "我會先從 data.md 找資料，再把找到的內容整理成自然好懂的導覽回答；資料庫沒有寫的內容，我不會自己亂補。";
-
-            const hint = document.createElement("p");
-            hint.textContent = "可以直接問問題，也可以從下面挑一個開始。";
-
-            const buttons = document.createElement("div");
-            buttons.className = "quick-buttons";
-
+            const quickIntro = document.createElement("div");
+            quickIntro.className = "quick-buttons";
             QUICK_QUESTIONS.forEach((question) => {
                 const button = document.createElement("button");
-                button.type = "button";
                 button.className = "quick-btn";
+                button.type = "button";
                 button.textContent = question;
                 button.addEventListener("click", () => askQuestion(question));
-                buttons.appendChild(button);
+                quickIntro.appendChild(button);
             });
 
-            section.append(title, description, hint, buttons);
-            welcomeContainer.appendChild(section);
+            wrapper.appendChild(quickIntro);
+            welcomeContainer.appendChild(wrapper);
         }
 
         function clearWelcome() {
             welcomeContainer.replaceChildren();
         }
 
-        function createBubble(sender, text, sources = [], mode = "") {
+        function appendStyledInline(container, text) {
+            const parts = String(text || "").split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
+            parts.forEach((part) => {
+                if (part.startsWith("**") && part.endsWith("**")) {
+                    const strong = document.createElement("strong");
+                    strong.textContent = part.slice(2, -2);
+                    container.appendChild(strong);
+                } else {
+                    container.appendChild(document.createTextNode(part));
+                }
+            });
+        }
+
+        function isHeadingLine(line) {
+            const plain = line.replace(/^[#\s]+/, "").trim();
+            if (!plain) return false;
+            if (plain.length <= 18 && /[：:]$/.test(plain)) return true;
+            return /^[\u{1F300}-\u{1FAFF}][^\n]{0,26}$/u.test(plain);
+        }
+
+        function renderRichText(container, text) {
+            container.replaceChildren();
+            const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+            let listEl = null;
+
+            const flushList = () => {
+                if (listEl) {
+                    container.appendChild(listEl);
+                    listEl = null;
+                }
+            };
+
+            lines.forEach((rawLine) => {
+                const line = rawLine.trim();
+                if (!line) {
+                    flushList();
+                    return;
+                }
+
+                if (/^[-•*]\s+/.test(line)) {
+                    if (!listEl) {
+                        listEl = document.createElement("ul");
+                    }
+                    const li = document.createElement("li");
+                    appendStyledInline(li, line.replace(/^[-•*]\s+/, ""));
+                    listEl.appendChild(li);
+                    return;
+                }
+
+                flushList();
+
+                if (isHeadingLine(line)) {
+                    const heading = document.createElement("div");
+                    heading.className = "rich-heading";
+                    appendStyledInline(heading, line.replace(/[：:]$/, ""));
+                    container.appendChild(heading);
+                    return;
+                }
+
+                const p = document.createElement("p");
+                appendStyledInline(p, line);
+                container.appendChild(p);
+            });
+
+            flushList();
+        }
+
+        function getMessageLabel(sender) {
+            return sender === "bot" ? "豆干弟" : "你";
+        }
+
+        function createMessageElement(sender, text, sources = [], mode = "", storymapUrl = STORYMAP_URL) {
             const message = document.createElement("div");
             message.className = `message ${sender}`;
+
+            const inner = document.createElement("div");
+            inner.className = "message-inner";
+
+            const avatar = document.createElement("div");
+            avatar.className = `avatar ${sender}`;
+            if (sender === "bot") {
+                const avatarImg = document.createElement("img");
+                avatarImg.className = "dougan-avatar-img";
+                avatarImg.dataset.douganAvatar = "";
+                avatarImg.src = sessionStorage.getItem(AVATAR_CACHE_KEY) || "/static/dougan-di-fallback.svg";
+                avatarImg.alt = "大溪豆干弟";
+                avatar.appendChild(avatarImg);
+            } else {
+                avatar.textContent = "你";
+            }
+
+            const wrap = document.createElement("div");
+            wrap.className = "bubble-wrap";
+
+            const meta = document.createElement("div");
+            meta.className = "message-meta";
+            meta.textContent = `${getMessageLabel(sender)} ・ ${nowTime()}`;
 
             const bubble = document.createElement("div");
             bubble.className = "bubble";
 
             const content = document.createElement("div");
             content.className = "message-text";
-            content.textContent = text;
+
+            if (sender === "bot") {
+                renderRichText(content, text);
+            } else {
+                const p = document.createElement("p");
+                p.textContent = text;
+                content.appendChild(p);
+            }
             bubble.appendChild(content);
 
-            if (sender === "bot" && (sources.length || mode)) {
-                const sourceRow = document.createElement("div");
-                sourceRow.className = "source-row";
+            if (sender === "bot") {
+                const row = document.createElement("div");
+                row.className = "source-row";
 
-                sources.forEach((source) => {
+                (Array.isArray(sources) ? sources : []).forEach((source) => {
                     const chip = document.createElement("span");
                     chip.className = "source-chip";
-                    chip.textContent = `data.md｜${source}`;
-                    sourceRow.appendChild(chip);
+                    if (source && typeof source === "object") {
+                        chip.textContent = `📚 ${source.category || "data.md"}｜${source.title || "來源"}`;
+                    } else {
+                        chip.textContent = `📚 data.md｜${String(source)}`;
+                    }
+                    row.appendChild(chip);
                 });
 
                 if (mode) {
                     const modeChip = document.createElement("span");
                     modeChip.className = "mode-chip";
-                    modeChip.textContent = mode === "openai-rag" ? "AI RAG" : "本地 RAG";
-                    sourceRow.appendChild(modeChip);
+                    modeChip.textContent = mode === "openai-rag" ? "🤖 AI RAG" : "🧩 本地 RAG";
+                    row.appendChild(modeChip);
                 }
 
-                bubble.appendChild(sourceRow);
+                const storyLink = document.createElement("a");
+                storyLink.className = "story-chip";
+                storyLink.href = storymapUrl || STORYMAP_URL;
+                storyLink.target = "_blank";
+                storyLink.rel = "noopener noreferrer";
+                storyLink.textContent = "✨ 延伸看故事地圖";
+                row.appendChild(storyLink);
+
+                bubble.appendChild(row);
             }
 
-            message.appendChild(bubble);
+            wrap.append(meta, bubble);
+            inner.append(avatar, wrap);
+            message.appendChild(inner);
             return { message, content };
         }
 
         function appendMessage(sender, text, options = {}) {
-            const { sources = [], mode = "", save = true } = options;
-            const { message } = createBubble(sender, text, sources, mode);
+            const { sources = [], mode = "", storymapUrl = STORYMAP_URL, save = true } = options;
+            const { message } = createMessageElement(sender, text, sources, mode, storymapUrl);
             chatMessages.appendChild(message);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
             if (save && currentChatId) {
-                chats[currentChatId].messages.push({ sender, text, sources, mode });
+                chats[currentChatId].messages.push({ sender, text, sources, mode, storymapUrl });
                 saveChats();
             }
         }
 
-        async function appendBotMessage(text, sources = [], mode = "", save = true) {
-            const { message, content } = createBubble("bot", "", sources, mode);
+        async function appendBotMessage(text, sources = [], mode = "", storymapUrl = STORYMAP_URL, save = true) {
+            const { message, content } = createMessageElement("bot", "", sources, mode, storymapUrl);
             chatMessages.appendChild(message);
+            const shouldAnimate = String(text || "").length <= 900;
 
-            // 使用 textContent 而不是 innerHTML，避免 AI / 使用者內容被當成 HTML 執行。
-            const shouldAnimate = text.length <= 1000;
             if (!shouldAnimate) {
-                content.textContent = text;
+                renderRichText(content, text);
             } else {
+                let partial = "";
                 for (let i = 0; i < text.length; i += 1) {
-                    content.textContent += text[i];
-                    if (i % 4 === 0) {
+                    partial += text[i];
+                    if (i % 6 === 0 || i === text.length - 1) {
+                        renderRichText(content, partial);
                         chatMessages.scrollTop = chatMessages.scrollHeight;
-                        await new Promise((resolve) => setTimeout(resolve, 6));
+                        await new Promise((resolve) => setTimeout(resolve, 8));
                     }
                 }
             }
 
             chatMessages.scrollTop = chatMessages.scrollHeight;
-
             if (save && currentChatId) {
-                chats[currentChatId].messages.push({ sender: "bot", text, sources, mode });
+                chats[currentChatId].messages.push({ sender: "bot", text, sources, mode, storymapUrl });
                 saveChats();
             }
         }
@@ -668,14 +1244,13 @@
             chatMessages.replaceChildren();
             recContainer.replaceChildren();
 
-            if (!currentChatId || !chats[currentChatId]) {
-                return;
-            }
+            if (!currentChatId || !chats[currentChatId]) return;
 
             chats[currentChatId].messages.forEach((item) => {
                 appendMessage(item.sender, item.text, {
                     sources: Array.isArray(item.sources) ? item.sources : [],
                     mode: item.mode || "",
+                    storymapUrl: item.storymapUrl || STORYMAP_URL,
                     save: false
                 });
             });
@@ -683,10 +1258,7 @@
 
         function updateSidebar() {
             historyList.replaceChildren();
-
-            const entries = Object.entries(chats).sort(
-                (a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0)
-            );
+            const entries = Object.entries(chats).sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
 
             entries.forEach(([id, chat]) => {
                 const item = document.createElement("div");
@@ -702,15 +1274,15 @@
                 actions.className = "item-actions";
 
                 const renameButton = document.createElement("button");
-                renameButton.type = "button";
                 renameButton.className = "action-btn";
+                renameButton.type = "button";
                 renameButton.textContent = "✎";
                 renameButton.title = "重新命名";
                 renameButton.addEventListener("click", () => renameChat(id));
 
                 const deleteButton = document.createElement("button");
-                deleteButton.type = "button";
                 deleteButton.className = "action-btn";
+                deleteButton.type = "button";
                 deleteButton.textContent = "✕";
                 deleteButton.title = "刪除對話";
                 deleteButton.addEventListener("click", () => deleteChat(id));
@@ -723,7 +1295,7 @@
 
         function renameChat(id) {
             const oldTitle = chats[id]?.title || "新對話";
-            const newTitle = window.prompt("新名稱：", oldTitle);
+            const newTitle = window.prompt("請輸入新的對話名稱：", oldTitle);
             if (newTitle && newTitle.trim()) {
                 chats[id].title = newTitle.trim().slice(0, 40);
                 saveChats();
@@ -732,13 +1304,9 @@
         }
 
         function deleteChat(id) {
-            if (!window.confirm("確定刪除這個對話嗎？")) {
-                return;
-            }
-
+            if (!window.confirm("確定要刪除這個對話嗎？")) return;
             delete chats[id];
             saveChats();
-
             if (currentChatId === id) {
                 const remaining = Object.keys(chats);
                 if (remaining.length) {
@@ -752,35 +1320,30 @@
         }
 
         function loadChat(id) {
-            if (!chats[id]) {
-                return;
-            }
+            if (!chats[id]) return;
             currentChatId = id;
             clearWelcome();
             renderChatArea();
             updateSidebar();
             fetchInitTopics();
             userInput.focus();
+            closeSidebar();
         }
 
         function renderRecButtons(topics) {
             recContainer.replaceChildren();
-            if (!Array.isArray(topics) || !topics.length) {
-                return;
-            }
+            if (!Array.isArray(topics) || !topics.length) return;
 
             const box = document.createElement("div");
             box.className = "recommend-box";
-
             topics.slice(0, 8).forEach((topic) => {
                 const button = document.createElement("button");
                 button.type = "button";
                 button.className = "rec-btn";
-                button.textContent = topic;
+                button.textContent = `👉 ${topic}`;
                 button.addEventListener("click", () => askQuestion(topic));
                 box.appendChild(button);
             });
-
             recContainer.appendChild(box);
         }
 
@@ -791,18 +1354,26 @@
                 const data = await response.json();
                 renderRecButtons(data.topics || []);
             } catch {
-                // 初始推薦抓不到不影響聊天主功能。
+                // 推薦主題抓不到時，不影響聊天主功能。
             }
         }
 
         function updateTitleFromQuestion(question) {
             if (!currentChatId || !chats[currentChatId]) return;
             if (chats[currentChatId].title !== "新對話") return;
-
             const compact = question.replace(/\s+/g, " ").trim();
             chats[currentChatId].title = compact.length > 18 ? `${compact.slice(0, 18)}…` : compact;
             saveChats();
             updateSidebar();
+        }
+
+        function getHistoryForBackend() {
+            if (!currentChatId || !chats[currentChatId]) return [];
+            const messages = chats[currentChatId].messages || [];
+            return messages.slice(-8).map((item) => ({
+                role: item.sender === "bot" ? "assistant" : "user",
+                text: String(item.text || "").slice(0, 1500)
+            }));
         }
 
         async function askQuestion(question) {
@@ -814,18 +1385,22 @@
                 startNewChat();
             }
 
+            const historyForBackend = getHistoryForBackend();
             clearWelcome();
             recContainer.replaceChildren();
             appendMessage("user", cleanQuestion);
             updateTitleFromQuestion(cleanQuestion);
             userInput.value = "";
-            setBusy(true, "豆干弟正在 data.md 裡找資料…");
+            setBusy(true, "🫘 豆干弟正在幫你整理導覽內容…");
 
             try {
                 const response = await fetch("/chat", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ question: cleanQuestion })
+                    body: JSON.stringify({
+                        question: cleanQuestion,
+                        history: historyForBackend
+                    })
                 });
 
                 let data;
@@ -836,27 +1411,27 @@
                 }
 
                 if (!response.ok) {
-                    const detail = typeof data.detail === "string" ? data.detail : "請求失敗";
-                    throw new Error(detail);
+                    throw new Error(typeof data.detail === "string" ? data.detail : "請求失敗");
                 }
 
-                setBusy(false, data.mode === "openai-rag" ? "AI RAG 回答完成" : "本地 RAG 回答完成");
+                setBusy(false, data.mode === "openai-rag" ? "✨ 豆干弟導覽完成" : "📚 已改用本地 RAG 回答");
                 await appendBotMessage(
                     data.answer || "目前沒有取得回答。",
                     Array.isArray(data.sources) ? data.sources : [],
-                    data.mode || ""
+                    data.mode || "",
+                    data.storymap_url || STORYMAP_URL
                 );
                 renderRecButtons(data.recommendations || []);
-
                 window.setTimeout(() => {
                     if (!isSending) statusText.textContent = "豆干弟隨時待命";
                 }, 1800);
             } catch (error) {
                 setBusy(false, "連線失敗");
                 await appendBotMessage(
-                    `抱歉，目前無法取得導覽回答。${error?.message ? `\n錯誤：${error.message}` : ""}`,
+                    `😥 抱歉，我目前沒有成功取得導覽回答。\n\n**錯誤訊息：** ${error?.message || "未知錯誤"}`,
                     [],
-                    "local-rag"
+                    "local-rag",
+                    STORYMAP_URL
                 );
             } finally {
                 userInput.disabled = false;
@@ -869,6 +1444,194 @@
             await askQuestion(userInput.value);
         }
 
+        function resolveStoryMapImageUrl(resourceKey, resources) {
+            if (!resourceKey) return "";
+            const resource = resources?.[resourceKey] || resourceKey;
+            const data = resource?.data || resource || {};
+
+            const directCandidates = [
+                data.src,
+                data.url,
+                data.uri,
+                resource?.src,
+                resource?.url,
+                resource?.uri
+            ].filter(Boolean);
+
+            for (const candidate of directCandidates) {
+                if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) {
+                    return candidate;
+                }
+            }
+
+            const resourceId = data.resourceId || data.resource || data.itemResourceId || resource?.resourceId;
+            if (typeof resourceId === "string" && resourceId) {
+                return STORYMAP_RESOURCE_BASE + resourceId.split("/").map(encodeURIComponent).join("/");
+            }
+            return "";
+        }
+
+        function findDouganDiStoryMapImage(story) {
+            const nodes = story?.nodes || {};
+            const resources = story?.resources || {};
+            const keywords = ["豆干弟", "豆乾弟", "豆干小弟", "導覽豆干"];
+
+            // 第一優先：圖片節點本身的 alt/caption/title 有標示「豆干弟」。
+            for (const node of Object.values(nodes)) {
+                if (!node || node.type !== "image") continue;
+                const searchable = JSON.stringify(node);
+                if (!keywords.some((keyword) => searchable.includes(keyword))) continue;
+                const imageRef = node?.data?.image || node?.data?.resource || node?.data?.resourceId;
+                const resolved = resolveStoryMapImageUrl(imageRef, resources);
+                if (resolved) return resolved;
+            }
+
+            // 第二優先：找含「豆干弟」文字的群組/區塊，再從同一物件中的圖片引用解析。
+            const seen = new Set();
+            function walk(value) {
+                if (!value || typeof value !== "object" || seen.has(value)) return "";
+                seen.add(value);
+                const searchable = JSON.stringify(value);
+                if (keywords.some((keyword) => searchable.includes(keyword))) {
+                    const refs = [];
+                    const collect = (v) => {
+                        if (!v) return;
+                        if (typeof v === "string") {
+                            if (resources[v]) refs.push(v);
+                            if (/^https?:\/\/.+\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(v)) refs.push(v);
+                            return;
+                        }
+                        if (typeof v === "object") Object.values(v).forEach(collect);
+                    };
+                    collect(value);
+                    for (const ref of refs) {
+                        if (/^https?:\/\//i.test(ref)) return ref;
+                        const resolved = resolveStoryMapImageUrl(ref, resources);
+                        if (resolved) return resolved;
+                    }
+                }
+                for (const child of Object.values(value)) {
+                    const found = walk(child);
+                    if (found) return found;
+                }
+                return "";
+            }
+            return walk(story);
+        }
+
+        function applyDouganAvatar(url) {
+            if (!url) return;
+            document.querySelectorAll("[data-dougan-avatar]").forEach((img) => {
+                if (img instanceof HTMLImageElement) {
+                    img.src = url;
+                    img.onerror = () => {
+                        img.onerror = null;
+                        img.src = "/static/dougan-di-fallback.svg";
+                    };
+                }
+            });
+        }
+
+        async function loadDouganDiFromStoryMap() {
+            const cached = sessionStorage.getItem(AVATAR_CACHE_KEY);
+            if (cached) applyDouganAvatar(cached);
+
+            try {
+                const response = await fetch(STORYMAP_DATA_URL, { mode: "cors", cache: "no-store" });
+                if (!response.ok) throw new Error(`StoryMap data ${response.status}`);
+                const story = await response.json();
+                const imageUrl = findDouganDiStoryMapImage(story);
+                if (!imageUrl) return;
+                sessionStorage.setItem(AVATAR_CACHE_KEY, imageUrl);
+                applyDouganAvatar(imageUrl);
+            } catch (error) {
+                console.info("StoryMap 豆干弟圖片暫時無法自動取得，先使用本地備援圖。", error);
+            }
+        }
+
+        function renderSpotCards() {
+            spotGrid.replaceChildren();
+            SPOTS.forEach((spot) => {
+                const card = document.createElement("article");
+                card.className = "spot-card";
+
+                const image = document.createElement("img");
+                image.className = "spot-image";
+                image.src = spot.image;
+                image.alt = `${spot.title} 圖片`;
+                image.loading = "lazy";
+
+                const body = document.createElement("div");
+                body.className = "spot-body";
+                const title = document.createElement("h4");
+                title.textContent = `📍 ${spot.title}`;
+                const desc = document.createElement("p");
+                desc.textContent = spot.description;
+                const actions = document.createElement("div");
+                actions.className = "card-actions";
+
+                const askBtn = document.createElement("button");
+                askBtn.type = "button";
+                askBtn.className = "mini-btn";
+                askBtn.textContent = "💬 問導覽";
+                askBtn.addEventListener("click", () => askQuestion(spot.ask));
+
+                const mapLink = document.createElement("a");
+                mapLink.className = "mini-btn";
+                mapLink.href = spot.mapUrl;
+                mapLink.target = "_blank";
+                mapLink.rel = "noopener noreferrer";
+                mapLink.textContent = "🗺️ 開導航";
+
+                const storyLink = document.createElement("a");
+                storyLink.className = "mini-btn";
+                storyLink.href = STORYMAP_URL;
+                storyLink.target = "_blank";
+                storyLink.rel = "noopener noreferrer";
+                storyLink.textContent = "✨ 故事地圖";
+
+                actions.append(askBtn, mapLink, storyLink);
+                body.append(title, desc, actions);
+                card.append(image, body);
+                spotGrid.appendChild(card);
+            });
+        }
+
+        function renderRouteCards() {
+            routeGrid.replaceChildren();
+            ROUTES.forEach((route) => {
+                const card = document.createElement("article");
+                card.className = "route-card";
+                const body = document.createElement("div");
+                body.className = "route-body";
+
+                const title = document.createElement("h4");
+                title.textContent = `🧭 ${route.title}`;
+                const desc = document.createElement("p");
+                desc.textContent = route.summary;
+                const actions = document.createElement("div");
+                actions.className = "card-actions";
+
+                const askBtn = document.createElement("button");
+                askBtn.type = "button";
+                askBtn.className = "mini-btn";
+                askBtn.textContent = "🗨️ 直接套用";
+                askBtn.addEventListener("click", () => askQuestion(route.ask));
+
+                const mapLink = document.createElement("a");
+                mapLink.className = "mini-btn";
+                mapLink.href = route.mapUrl;
+                mapLink.target = "_blank";
+                mapLink.rel = "noopener noreferrer";
+                mapLink.textContent = "📍 看地圖";
+
+                actions.append(askBtn, mapLink);
+                body.append(title, desc, actions);
+                card.appendChild(body);
+                routeGrid.appendChild(card);
+            });
+        }
+
         document.getElementById("new-chat-btn").addEventListener("click", startNewChat);
         sendButton.addEventListener("click", sendMessage);
         userInput.addEventListener("keydown", (event) => {
@@ -877,8 +1640,16 @@
                 sendMessage();
             }
         });
+        menuButton.addEventListener("click", toggleSidebar);
+        overlay.addEventListener("click", closeSidebar);
+        document.querySelectorAll("[data-ask]").forEach((button) => {
+            button.addEventListener("click", () => askQuestion(button.getAttribute("data-ask") || ""));
+        });
 
-        // 啟動時優先開啟最近的對話；沒有紀錄才建立新對話。
+        loadDouganDiFromStoryMap();
+        renderSpotCards();
+        renderRouteCards();
+
         const existingIds = Object.keys(chats);
         if (existingIds.length) {
             existingIds.sort((a, b) => (chats[b].createdAt || 0) - (chats[a].createdAt || 0));
