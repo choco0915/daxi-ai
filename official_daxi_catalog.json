@@ -3,11 +3,111 @@
   "snapshot_date": "2026-08-20",
   "items": [
     {
+      "name": "大溪麥芽花生糖",
+      "entity_type": "official-topic",
+      "source": "桃園觀光導覽網－大溪老街散策專題",
+      "source_url": "https://travel.tycg.gov.tw/zh-tw/event/taoyuan-walker/3564",
+      "aliases": [
+        "麥芽花生糖",
+        "花生糖",
+        "古早味花生糖",
+        "手工花生糖"
+      ],
+      "keywords": [
+        "大溪",
+        "花生",
+        "麥芽糖",
+        "古早味",
+        "伴手禮",
+        "甜點"
+      ],
+      "summary": "桃園觀光官方內容將花生糖列為大溪老街代表性傳統美食，並介紹大溪以麥芽糖與花生製作的古早味花生糖。",
+      "region": "大溪區",
+      "verified_date": "2026-08-20"
+    },
+    {
+      "name": "里長嬤碗粿",
+      "entity_type": "consume",
+      "source": "桃園觀光導覽網",
+      "source_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/435",
+      "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/435",
+      "aliases": [
+        "碗粿",
+        "黑糖碗粿",
+        "傳統碗粿"
+      ],
+      "keywords": [
+        "大溪",
+        "和平老街",
+        "客家口味",
+        "小吃"
+      ],
+      "summary": "桃園觀光官方介紹，里長嬤碗粿位於大溪和平老街，主打傳統碗粿與黑糖碗粿。",
+      "address": "桃園市大溪區和平路79號",
+      "tel": "03-3882258",
+      "open_time": "每日 11:00-17:30（以官方頁最新公告為準）",
+      "region": "大溪區",
+      "verified_date": "2026-08-20"
+    },
+    {
+      "name": "金字塔三角湯圓",
+      "entity_type": "consume",
+      "source": "桃園觀光導覽網",
+      "source_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/463",
+      "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/463",
+      "aliases": [
+        "湯圓",
+        "三角湯圓",
+        "鹹湯圓"
+      ],
+      "keywords": [
+        "大溪",
+        "中央路",
+        "古早味",
+        "小吃"
+      ],
+      "summary": "桃園觀光官方介紹，金字塔三角湯圓的招牌是三角鹹湯圓，外皮紮實、內含餡料。",
+      "address": "桃園市大溪區中央路181號",
+      "tel": "03-3889724",
+      "open_time": "週一、二、五 12:00-19:00；週三、四休息；週六、日 11:00-20:00（以官方頁最新公告為準）",
+      "region": "大溪區",
+      "verified_date": "2026-08-20"
+    },
+    {
+      "name": "賴媽媽豆花",
+      "entity_type": "consume",
+      "source": "桃園觀光導覽網",
+      "source_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/444",
+      "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/444",
+      "aliases": [
+        "豆花",
+        "傳統豆花",
+        "賴媽媽豆花"
+      ],
+      "keywords": [
+        "大溪",
+        "登龍路",
+        "花生豆花",
+        "古早味",
+        "甜品"
+      ],
+      "summary": "桃園觀光官方介紹，賴媽媽豆花以傳統豆花搭配花生等配料，主打古早味口感。",
+      "address": "桃園市大溪區登龍路22號",
+      "tel": "03-3889646",
+      "open_time": "每日 09:00-18:00（以官方頁最新公告為準）",
+      "region": "大溪區",
+      "verified_date": "2026-08-20"
+    },
+    {
       "name": "大溪老街油飯",
       "entity_type": "consume",
       "source": "桃園觀光導覽網－大溪老街周邊店家",
       "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/nearby-shopping/414?page=1",
-      "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/2883"
+      "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/2883",
+      "region": "大溪區",
+      "aliases": [
+        "油飯"
+      ]
     },
     {
       "name": "芊香園",
@@ -30,8 +130,10 @@
       "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/nearby-shopping/414?page=1",
       "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/2880",
       "aliases": [
-        "小鎮豆花"
-      ]
+        "小鎮豆花",
+        "豆花"
+      ],
+      "region": "大溪區"
     },
     {
       "name": "益康泡菜(中央路店)",
@@ -44,7 +146,12 @@
       "name": "萬家老街豬腳",
       "entity_type": "consume",
       "source": "桃園觀光導覽網－大溪老街周邊店家",
-      "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/nearby-shopping/414?page=1"
+      "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/nearby-shopping/414?page=1",
+      "region": "大溪區",
+      "aliases": [
+        "豬腳",
+        "老街豬腳"
+      ]
     },
     {
       "name": "廖心蘭豆干店",
@@ -55,21 +162,27 @@
       "aliases": [
         "廖心蘭",
         "廖心蘭豆干"
-      ]
+      ],
+      "region": "大溪區"
     },
     {
       "name": "源古本舖",
       "entity_type": "consume",
       "source": "桃園觀光導覽網－大溪老街周邊店家",
       "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/nearby-shopping/414?page=1",
-      "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/1948"
+      "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/1948",
+      "region": "大溪區"
     },
     {
       "name": "阿枝蜂蜜",
       "entity_type": "consume",
       "source": "桃園觀光導覽網－大溪老街周邊店家",
       "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/nearby-shopping/414?page=1",
-      "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/1813"
+      "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/1813",
+      "region": "大溪區",
+      "aliases": [
+        "蜂蜜"
+      ]
     },
     {
       "name": "陳媽媽月光餅",
@@ -84,7 +197,8 @@
       "address": "桃園市大溪區和平路87號",
       "tel": "03-3882451",
       "open_time": "星期日 09:00-18:00；星期一、二休息；星期三至六 09:00-18:00（以官方頁最新公告為準）",
-      "verified_date": "2026-08-20"
+      "verified_date": "2026-08-20",
+      "region": "大溪區"
     },
     {
       "name": "下街四十番地工房",
@@ -108,7 +222,8 @@
       "detail_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/1716",
       "aliases": [
         "拿破崙派"
-      ]
+      ],
+      "region": "大溪區"
     },
     {
       "name": "大溪手工地瓜餅舖-世達食品行",
@@ -119,7 +234,8 @@
       "aliases": [
         "地瓜餅",
         "手工地瓜餅"
-      ]
+      ],
+      "region": "大溪區"
     },
     {
       "name": "布丁叔叔的美味甜點",
@@ -164,7 +280,8 @@
       "aliases": [
         "老阿伯豆干",
         "現滷豆干"
-      ]
+      ],
+      "region": "大溪區"
     },
     {
       "name": "溪友緣風味料理店",
@@ -1420,5 +1537,7 @@
       "source": "桃園觀光導覽網－大溪老街周邊店家",
       "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/nearby-shopping/414?page=19"
     }
-  ]
+  ],
+  "version": "16.0",
+  "notes": "V16: 增加大溪官方食品／小吃主題別名與關鍵詞，支援以產品名稱而非店名搜尋。"
 }

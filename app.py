@@ -930,11 +930,16 @@ def local_rag_answer(
 
     # data.md 沒有獨立章節，但桃園官方「消費／美食」有直接命中的實體時，
     # 例如「月光餅 → 陳媽媽月光餅」，應優先回答官方實體，而不是退回寬泛的美食章節。
-    if official_record and official_record.get("entity_type") == "consume":
+    if official_record and official_record.get("entity_type") in {"consume", "official-topic"}:
         name = str(official_record.get("name") or title)
-        q_norm = normalize_text(question)
-        n_norm = normalize_text(name)
-        direct_match = (q_norm and q_norm in n_norm) or (n_norm and n_norm in q_norm)
+        q_norm = normalize_text(re.sub(r"[|｜].*$", "", question))
+        searchable_names = [name, *[str(x) for x in official_record.get("aliases", [])]]
+        direct_match = any(
+            (q_norm and q_norm in normalize_text(candidate))
+            or (normalize_text(candidate) and normalize_text(candidate) in q_norm)
+            for candidate in searchable_names
+            if candidate
+        )
         if direct_match or not hits or wants_detail(question):
             paragraphs = [f"🍴 **{name}**"]
             detail = str(official_record.get("description") or official_record.get("summary") or "").strip()
@@ -955,7 +960,7 @@ def local_rag_answer(
                     paragraphs.append(external)
             if len(paragraphs) == 1 and official_record.get("catalog_origin"):
                 paragraphs.append(
-                    "桃園觀光官方的「大溪老街周邊店家」名單有收錄這個名稱；"
+                    "桃園觀光官方的大溪店家／主題索引有收錄這個名稱；"
                     "本輪已成功辨識這個 data.md 之外的實體，但官方詳細頁內容暫時沒有抓完整。"
                 )
             return "\n\n".join(paragraphs).strip()
@@ -1382,29 +1387,83 @@ def _load_bundled_daxi_catalog() -> tuple[list[dict[str, Any]], str]:
 
 
 def _catalog_match_score(query: str, item: dict[str, Any]) -> float:
-    candidates = [str(item.get("name") or ""), *[str(x) for x in item.get("aliases", [])]]
+    """官方本地索引的實體／產品搜尋分數。
+
+    V15 主要只比「店名」與少數手工 aliases，所以「月光餅」因為有 alias 能命中，
+    但「麥芽花生糖、碗粿、湯圓」等產品詞很容易落回寬泛 data.md。
+    V16 把 aliases / keywords / summary 一起納入，並允許有意義的 3 字以上片語重疊。
+    """
+    qn = normalize_text(query)
+    if not qn:
+        return 0.0
+
+    names = [str(item.get("name") or ""), *[str(x) for x in item.get("aliases", [])]]
+    keywords = [str(x) for x in item.get("keywords", []) if str(x).strip()]
+    descriptive = [str(item.get("summary") or ""), str(item.get("description") or "")]
+
     best = 0.0
-    for candidate in candidates:
+    for candidate in names:
         if not candidate:
             continue
-        best = max(best, attraction_match_score(query, candidate))
-        qn = normalize_text(query)
         cn = normalize_text(candidate)
-        if qn and len(qn) >= 2 and qn in cn:
-            # 像「月光餅」→「陳媽媽月光餅」應視為高信心直接命中。
-            best = max(best, 90.0 + min(len(qn), 20) / 100)
-        if cn and len(cn) >= 2 and cn in qn:
+        best = max(best, attraction_match_score(query, candidate))
+        if cn == qn:
+            best = max(best, 100.0)
+        elif qn and len(qn) >= 2 and qn in cn:
+            best = max(best, 92.0 + min(len(qn), 20) / 100)
+        elif cn and len(cn) >= 2 and cn in qn:
+            best = max(best, 89.0)
+
+    # 產品／主題關鍵詞。例如「麥芽花生糖」可由 keywords 或 aliases 命中，
+    # 但「大溪」「小吃」等泛詞不會單獨造成高分。
+    generic_terms = {"大溪", "桃園", "老街", "小吃", "美食", "店家", "伴手禮", "傳統", "古早味"}
+    for keyword in keywords:
+        kn = normalize_text(keyword)
+        if len(kn) < 2 or kn in generic_terms:
+            continue
+        if qn == kn:
             best = max(best, 88.0)
+        elif kn in qn or qn in kn:
+            best = max(best, 80.0 + min(len(kn), 12) / 100)
+
+    # 最後才用描述文字補搜尋；至少 3 個中文字，避免「糖／店／街」造成誤判。
+    for text in descriptive:
+        tn = normalize_text(text)
+        if len(qn) >= 3 and qn in tn:
+            best = max(best, 76.0)
+
+    # 對未建立 alias 的新產品名稱，計算最長共同連續中文字片語。
+    # 3 字（如「花生糖」）可作弱備援，但分數低於明確 alias，避免搶走正確官方主題。
+    combined = " ".join([*names, *keywords])
+    cn = normalize_text(combined)
+    if len(qn) >= 4 and cn:
+        longest = 0
+        for n in range(min(6, len(qn)), 2, -1):
+            if any(qn[i:i+n] in cn for i in range(0, len(qn) - n + 1)):
+                longest = n
+                break
+        if longest >= 3:
+            best = max(best, 61.0 + longest * 2.0)
+
+    # 大溪區官方主題／店家優先於「大溪周邊」但實際位在其他區的店家。
+    if best >= 60 and str(item.get("region") or "") == "大溪區":
+        best += 4.0
+    if best >= 60 and str(item.get("entity_type") or "") == "official-topic":
+        best += 2.0
     return best
 
 
 def _record_from_catalog_item(item: dict[str, Any]) -> dict[str, Any]:
-    """把官方索引快照轉成可直接供聊天層使用的 consume record。"""
+    """把官方索引快照轉成聊天層可使用的官方實體。
+
+    V16 不再假設官方索引只有「店家」。官方來源也可能是食品／文化主題，
+    例如「麥芽花生糖」本身是搜尋主題，不應為了沒有獨立店家 detail URL 就被丟掉。
+    """
     source_url = str(item.get("detail_url") or item.get("source_url") or TYCG_DAXI_NEARBY_SHOPPING_URL)
     return {
         "id": str(item.get("id") or ""),
-        "entity_type": "consume",
-        "name": str(item.get("name") or "桃園觀光店家"),
+        "entity_type": str(item.get("entity_type") or "consume"),
+        "name": str(item.get("name") or "桃園觀光資料"),
         "summary": str(item.get("summary") or ""),
         "description": str(item.get("description") or item.get("summary") or ""),
         "address": str(item.get("address") or ""),
@@ -1412,14 +1471,41 @@ def _record_from_catalog_item(item: dict[str, Any]) -> dict[str, Any]:
         "tel": str(item.get("tel") or ""),
         "website": "",
         "ty_website": source_url,
-        "px": "",
-        "py": "",
-        "pictures": [],
+        "px": str(item.get("px") or ""),
+        "py": str(item.get("py") or ""),
+        "pictures": list(item.get("pictures") or []),
         "source_url": source_url,
         "catalog_origin": str(item.get("catalog_origin") or "official-catalog"),
         "catalog_source_url": str(item.get("source_url") or TYCG_DAXI_NEARBY_SHOPPING_URL),
         "verified_date": str(item.get("verified_date") or ""),
+        "aliases": list(item.get("aliases") or []),
+        "keywords": list(item.get("keywords") or []),
+        "region": str(item.get("region") or ""),
     }
+
+
+def _find_bundled_catalog_record(query: str, focus_entities: list[str] | None = None, min_score: float = 80.0) -> dict[str, Any] | None:
+    """先查本地官方快照，不做任何網路請求。
+
+    這是 V16 的關鍵：Render 上搜尋引擎可能 timeout、OpenAI 也可能沒有 quota，
+    所以具體大溪名詞先由 bundled official index 即時命中；只有本地無高信心結果時才外連。
+    """
+    items, _ = _load_bundled_daxi_catalog()
+    if not items:
+        return None
+    variants = entity_query_variants(query, focus_entities)
+    best_score = 0.0
+    best_item: dict[str, Any] | None = None
+    for item in items:
+        score = max((_catalog_match_score(v, item) for v in variants if v), default=0.0)
+        if score > best_score:
+            best_score, best_item = score, item
+    if not best_item or best_score < min_score:
+        return None
+    record = _record_from_catalog_item(best_item)
+    record["match_score"] = round(best_score, 3)
+    record["matched_from"] = "bundled-official-index"
+    return record
 
 
 def entity_query_variants(query: str, focus_entities: list[str] | None = None) -> list[str]:
@@ -1524,10 +1610,10 @@ def _extract_consume_detail_links(html: str, base_url: str) -> list[dict[str, st
 
 
 async def _load_official_consume_catalog() -> list[dict[str, Any]]:
-    """建立大溪官方店家索引（V15：官方快照優先 + 線上增量）。
+    """建立大溪官方店家索引（V16：官方快照優先 + 產品／主題別名 + 線上增量）。
 
     V14 已確認 Render 能連官方景點 Open Data，但官方周邊店家 HTML 在 Render 上
-    可能無法解析出 consume/detail 連結。因此 V15 不再把「線上 HTML 必須成功」當前提：
+    可能無法解析出 consume/detail 連結。因此 V16 不再把「線上 HTML 必須成功」當前提：
     先載入隨專案部署的官方大溪店家名稱快照，再盡力用線上頁補上/更新連結。
     """
     global _official_consume_catalog_cache, _official_consume_catalog_cache_at, _last_official_error
@@ -1541,7 +1627,7 @@ async def _load_official_consume_catalog() -> list[dict[str, Any]]:
 
     timeout = httpx.Timeout(12.0, connect=5.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/15.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/16.0)",
         "Accept-Language": "zh-TW,zh;q=0.9",
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     }
@@ -1682,7 +1768,7 @@ async def _find_consume_from_official_catalog(query: str, focus_entities: list[s
 
     timeout = httpx.Timeout(12.0, connect=5.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/15.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/16.0)",
         "Accept-Language": "zh-TW,zh;q=0.9",
     }
     try:
@@ -1731,6 +1817,13 @@ async def find_official_consume(query: str, focus_entities: list[str] | None = N
 
 
 async def find_official_entity(query: str, focus_entities: list[str] | None = None) -> dict[str, Any] | None:
+    # V16：先查 bundled official index。高信心命中就立即回傳，避免每個產品詞都先等
+    # Render 對官方列表／搜尋引擎 timeout。這也讓「麥芽花生糖、碗粿、湯圓」和
+    # 「月光餅」一樣，在 OpenAI 無額度時仍可搜尋。
+    bundled = _find_bundled_catalog_record(query, focus_entities, min_score=80.0)
+    if bundled:
+        return bundled
+
     attraction = await find_official_attraction(query, focus_entities)
     consume = await find_official_consume(query, focus_entities)
     if attraction and consume:
@@ -3018,11 +3111,19 @@ def rate_limit_or_raise(request: Request) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global _official_consume_catalog_cache, _official_consume_catalog_cache_at
     build_search_index()
+    # V16：啟動時直接載入 bundled official index，不等第一個使用者查詢才建立。
+    # 這個步驟完全不連網，所以 Render / 搜尋引擎暫時不可用也不影響外部名詞辨識。
+    seed_items, _ = _load_bundled_daxi_catalog()
+    if seed_items:
+        _official_consume_catalog_cache = seed_items
+        _official_consume_catalog_cache_at = time.time()
+        print(f"🍴 V16 bundled 大溪官方索引載入：{len(seed_items)} 筆")
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="15.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="16.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -3107,7 +3208,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "15.0.0",
+        "app_version": "16.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -3120,6 +3221,7 @@ def diagnostics() -> dict[str, Any]:
         "official_consumes_cached": len(_official_consume_cache),
         "official_consume_catalog_cached": len(_official_consume_catalog_cache),
         "bundled_official_catalog_file": os.path.basename(OFFICIAL_DAXI_CATALOG_PATH),
+        "bundled_official_catalog_items": len(_load_bundled_daxi_catalog()[0]),
         "official_albums_cached": len(_official_album_cache),
         "public_search_cache_entries": len(_public_search_cache),
         "last_public_search_error": _last_public_search_error or None,
@@ -3141,7 +3243,7 @@ async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) ->
     record = await find_official_entity(name, [name])
     public_results = [] if record else await public_web_search(name, limit=5)
     return {
-        "app_version": "15.0.0",
+        "app_version": "16.0.0",
         "query": name,
         "direct_kb_topic": has_direct_kb_topic(name, hits),
         "kb_titles": [hit.get("title") for hit in hits],
@@ -3149,10 +3251,15 @@ async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) ->
             "name": record.get("name"),
             "entity_type": record.get("entity_type") or "attraction",
             "source_url": record.get("source_url"),
+            "matched_from": record.get("matched_from"),
+            "match_score": record.get("match_score"),
+            "aliases": record.get("aliases", []),
+            "keywords": record.get("keywords", []),
         } if record else None,
         "official_consumes_cached": len(_official_consume_cache),
         "official_consume_catalog_cached": len(_official_consume_catalog_cache),
         "bundled_official_catalog_file": os.path.basename(OFFICIAL_DAXI_CATALOG_PATH),
+        "bundled_official_catalog_items": len(_load_bundled_daxi_catalog()[0]),
         "public_results": public_results,
         "last_official_error": _last_official_error or None,
         "last_public_search_error": _last_public_search_error or None,
@@ -3175,7 +3282,7 @@ async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) ->
             matched_gallery = gallery_url
             break
     return {
-        "app_version": "15.0.0",
+        "app_version": "16.0.0",
         "query": name,
         "official_record": {
             "name": record.get("name"),
@@ -3381,8 +3488,24 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
             mode = "local-web" if (public_results or official_record) else "local-rag"
 
     # active_topics 只代表「目前正在聊的核心主題」。
-    # 問附近後仍保留原景點；推薦清單另存在 recommendations，使用者才能下一句說「第二個」。
-    if focus_entities:
+    # V16：若使用者輸入的產品詞直接命中官方實體（例如「豆花 → 賴媽媽豆花」、
+    # 「碗粿 → 里長嬤碗粿」），官方實體要比 data.md 的泛章節 focus 更優先，
+    # 這樣下一句「照片／詳細介紹／附近」才會延續正確店家，而不是回到「傳統甜品與小吃」。
+    base_q = normalize_text(re.sub(r"[|｜].*$", "", question))
+    official_names = []
+    if official_record:
+        official_names = [
+            str(official_record.get("name") or ""),
+            *[str(x) for x in official_record.get("aliases", [])],
+        ]
+    official_direct = any(
+        base_q and (base_q in normalize_text(name) or normalize_text(name) in base_q)
+        for name in official_names if name
+    )
+
+    if official_record and official_record.get("name") and official_direct:
+        active_topics = [str(official_record["name"])]
+    elif focus_entities:
         active_topics = list(dict.fromkeys(focus_entities))[:5]
     elif official_record and official_record.get("name"):
         active_topics = [str(official_record["name"])]
@@ -3412,7 +3535,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "15.0.0",
+            "app_version": "16.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),

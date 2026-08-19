@@ -442,5 +442,35 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(app.attraction_match_score("月光餅", "陳媽媽月光餅"), 60)
 
 
+    def test_v16_bundled_product_terms_are_searchable(self) -> None:
+        cases = {
+            "麥芽花生糖": "大溪麥芽花生糖",
+            "碗粿": "里長嬤碗粿",
+            "湯圓": "金字塔三角湯圓",
+            "豆花": "賴媽媽豆花",
+            "豬腳": "萬家老街豬腳",
+            "蜂蜜": "阿枝蜂蜜",
+            "油飯": "大溪老街油飯",
+        }
+        for query, expected in cases.items():
+            record = app._find_bundled_catalog_record(query, [])
+            self.assertIsNotNone(record, query)
+            self.assertEqual(record.get("name"), expected, query)
+
+    def test_v16_official_topic_keeps_entity_type_and_summary(self) -> None:
+        record = app._find_bundled_catalog_record("麥芽花生糖", [])
+        self.assertEqual(record.get("entity_type"), "official-topic")
+        self.assertIn("花生糖", record.get("summary", ""))
+        answer = app.local_rag_answer("麥芽花生糖", app.retrieve("麥芽花生糖"), record)
+        self.assertIn("大溪麥芽花生糖", answer)
+        self.assertNotIn("外部搜尋這一輪沒有取得可靠結果", answer)
+
+    def test_v16_catalog_matches_keywords_not_only_shop_name(self) -> None:
+        items, _ = app._load_bundled_daxi_catalog()
+        item = next(x for x in items if x.get("name") == "大溪麥芽花生糖")
+        self.assertGreaterEqual(app._catalog_match_score("古早味花生糖", item), 80)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

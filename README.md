@@ -195,3 +195,26 @@ V15 改成 **官方快照優先 + 線上增量更新**：
 例如「月光餅」會先匹配官方索引中的「陳媽媽月光餅」，再嘗試官方 Detail 頁；即使 Detail 頁暫時無法連線，也不會再退回只有「伴手禮推薦／傳統甜品與小吃」的寬泛回答。
 
 部署 V15 時，除了 `app.py` 之外，**一定要把 `official_daxi_catalog.json` 放在 repository 根目錄**，和 `app.py`、`data.md` 同一層。
+
+## V16：產品名稱也能搜尋
+
+V15 的 bundled official catalog 主要以「店家名稱」為索引，因此「月光餅」因為有明確 alias 可以命中，但像「麥芽花生糖、碗粿、湯圓、豆花」這類產品／品項名稱不一定等於店名，容易退回 data.md 的寬泛章節。
+
+V16 改成：
+
+1. 啟動時直接載入 `official_daxi_catalog.json`，不需先等待 Render 連外。
+2. 索引除了 `name`，也搜尋 `aliases`、`keywords`、`summary`。
+3. 對產品詞加入官方主題索引，例如大溪麥芽花生糖、里長嬤碗粿、金字塔三角湯圓、賴媽媽豆花。
+4. 高信心的 bundled official match 會在官方即時網頁／搜尋引擎之前先回覆，因此 OpenAI 沒額度或搜尋引擎逾時仍能使用。
+5. 外部實體被命中後會直接成為 `active_topics`，下一句「照片、詳細介紹、附近」會延續該店家／主題，不會退回 data.md 的泛章節。
+
+可測試：
+
+```text
+/diagnostics/search?name=麥芽花生糖
+/diagnostics/search?name=碗粿
+/diagnostics/search?name=湯圓
+/diagnostics/search?name=豆花
+```
+
+V16 預期 `official_entity.matched_from` 為 `bundled-official-index`，且 `bundled_official_catalog_items` 大於 0。
