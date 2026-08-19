@@ -231,6 +231,22 @@ class ConversationAndOfficialFallbackTests(unittest.IsolatedAsyncioTestCase):
             "https://travel.tycg.gov.tw/zh-tw/multimedia/album/3431",
         )
 
+    def test_broad_html_image_extraction(self):
+        html = r"""
+        <div style="background-image:url('/assets/photo/furen-main.jpg?x=1')"></div>
+        <img data-src="https://travel.tycg.gov.tw/cdn/photos/furen-2.webp">
+        <script>window.x={"imageUrl":"/uploads/furen-3.png"}</script>
+        """
+        urls = app._extract_image_urls_from_html(html, "https://travel.tycg.gov.tw/zh-tw/multimedia/album/3431")
+        self.assertTrue(any("furen-main.jpg" in url for url in urls))
+        self.assertTrue(any("furen-2.webp" in url for url in urls))
+        self.assertTrue(any("furen-3.png" in url for url in urls))
+
+    def test_official_album_source_for_furen(self):
+        source = app.official_album_source_for_name("福仁宮")
+        self.assertIsNotNone(source)
+        self.assertIn("multimedia/album/3431", source["url"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -62,3 +62,22 @@ python test_rag.py
 ```text
 https://你的網站.onrender.com/diagnostics
 ```
+
+## V9：官方照片抓取強化
+
+如果使用者輸入「照片」而官方頁面沒有直接輸出可用圖片網址，V9 會：
+
+1. 先讀桃園觀光景點頁。
+2. 加入已知官方相簿頁。
+3. 對部分大溪景點加入官方「山水之間遇見大龍門」頁作為第二官方來源。
+4. 從 `img src`、lazy-load、`srcset`、CSS `background-image`、內嵌 JSON、一般 JPG/PNG/WebP URL 等位置抽取候選圖片。
+5. 實際用 HTTP `Content-Type: image/*` 驗證後才傳給前端。
+6. 若仍無法直接顯示，回答來源列至少會保留「桃園觀光官方相簿」可點擊連結。
+
+新增安全診斷：
+
+```text
+/diagnostics/images?name=福仁宮
+```
+
+會回傳官方景點匹配、官方相簿 URL、驗證成功的圖片數量與最近一次圖片錯誤，不包含任何 API Key。

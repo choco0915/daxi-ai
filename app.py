@@ -53,6 +53,12 @@ OFFICIAL_ALBUM_PAGE_MAP: dict[str, str] = {
     "武德殿": "https://travel.tycg.gov.tw/zh-tw/multimedia/album/62",
     "大溪木藝生態博物館武德殿": "https://travel.tycg.gov.tw/zh-tw/multimedia/album/62",
 }
+# 大龍門官方子站部分大溪景點頁會直接帶「照片／環景」內容，
+# 當主站 HTML 沒有輸出圖片網址時，作為第二個官方頁面來源。
+OFFICIAL_DALONGMEN_PAGE_MAP: dict[str, str] = {
+    "福仁宮": "https://travel.tycg.gov.tw/dalongmen/zh-tw/attraction/1172",
+}
+
 OFFICIAL_CACHE_SECONDS = 1800
 
 # 官方來源優先。OpenAI web_search 的 allowed_domains 會包含該網域的子網域。
@@ -1152,6 +1158,20 @@ def official_source_from_record(record: dict[str, Any] | None) -> dict[str, str]
     }
 
 
+def official_album_source_for_name(name: str) -> dict[str, str] | None:
+    name_norm = normalize_text(name)
+    for key, url in OFFICIAL_ALBUM_PAGE_MAP.items():
+        key_norm = normalize_text(key)
+        if key_norm in name_norm or name_norm in key_norm:
+            return {
+                "type": "web",
+                "title": f"桃園觀光官方相簿｜{key}",
+                "url": url,
+                "domain": "travel.tycg.gov.tw",
+            }
+    return None
+
+
 def official_images_from_record(record: dict[str, Any] | None) -> list[dict[str, str]]:
     if not record:
         return []
@@ -1161,11 +1181,27 @@ def official_images_from_record(record: dict[str, Any] | None) -> list[dict[str,
 
 
 def _looks_like_image_url(url: str) -> bool:
-    lower = (url or "").lower().split("?")[0]
-    return any(lower.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")) or any(
-        token in lower for token in ("/image/", "/images/", "/upload/", "/uploads/", "/photo/", "/photos/")
-    )
+    """寬鬆判斷是否可能是圖片 URL。
 
+    桃園觀光頁面可能使用 CDN、lazy-load、srcset、CSS background-image、
+    查詢參數或不固定的 /image/ 路徑。真正是否為圖片，後續再用
+    HTTP Content-Type 驗證，因此這裡不再只接受少數固定路徑。
+    """
+    lower = (url or "").lower().strip()
+    if not lower.startswith(("http://", "https://", "/")):
+        return False
+    if any(bad in lower for bad in (
+        "favicon", "sprite", "qrcode", "qr-code", "loading", "placeholder",
+        "logo", "icon", "avatar", "blank.gif", ".svg", ".ico",
+    )):
+        return False
+    return (
+        bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|[?#])", lower))
+        or any(token in lower for token in (
+            "/image/", "/images/", "/upload/", "/uploads/", "/photo/", "/photos/",
+            "/media/", "/file/", "/files/", "photoid=", "imageid=",
+        ))
+    )
 
 def _register_trusted_images(images: list[dict[str, str]]) -> list[dict[str, str]]:
     registered: list[dict[str, str]] = []
@@ -1209,7 +1245,7 @@ async def load_official_albums() -> list[dict[str, Any]]:
         return _official_album_cache
 
     timeout = httpx.Timeout(12.0, connect=6.0)
-    headers = {"User-Agent": "Daxi-AI-Guide/8.0"}
+    headers = {"User-Agent": "Daxi-AI-Guide/9.0"}
     root: ET.Element | None = None
     used_url = ""
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -1286,40 +1322,95 @@ async def find_album_images(query: str, focus_entities: list[str] | None = None)
 
 
 def _extract_image_urls_from_html(html: str, base_url: str) -> list[str]:
-    """從桃園觀光頁面 HTML / lazy-load / 內嵌 JSON 中抽出圖片網址。"""
+    """從官方 HTML、lazy-load、srcset、CSS 與內嵌 JSON 抽出圖片候選網址。"""
     normalized_html = unescape(html or "")
-    normalized_html = normalized_html.replace("\\/", "/").replace("\\u002F", "/")
+    normalized_html = (
+        normalized_html
+        .replace("\\/", "/")
+        .replace("\\u002F", "/")
+        .replace("\\u002f", "/")
+        .replace("&amp;", "&")
+    )
     raw_candidates: list[str] = []
 
     patterns = [
-        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-        r'<img[^>]+(?:data-src|data-original|data-lazy-src|data-url|src)=["\']([^"\']+)',
+        r'<meta[^>]+property=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\'](?:og:image|twitter:image)["\']',
+        r'<img[^>]+(?:data-src|data-original|data-lazy-src|data-url|data-image|src)=["\']([^"\']+)',
         r'<(?:source|img)[^>]+(?:data-srcset|srcset)=["\']([^"\']+)',
-        r'https?://[^\s"\'<>]+/image/\d+(?:/\d+x\d+)?[^\s"\'<>]*',
-        r'(?<![A-Za-z0-9])(/image/\d+(?:/\d+x\d+)?[^\s"\'<>]*)',
+        r'(?:background-image|background)\s*:\s*url\(["\']?([^\)"\']+)',
+        r'url\(["\']?([^\)"\']+\.(?:jpe?g|png|webp|gif|avif)(?:\?[^\)"\']*)?)',
+        r'["\'](?:image|imageUrl|image_url|photo|photoUrl|photo_url|src|url)["\']\s*:\s*["\']([^"\']+)',
+        r'https?://[^\s"\'<>]+\.(?:jpe?g|png|webp|gif|avif)(?:\?[^\s"\'<>]*)?',
+        r'(?<![A-Za-z0-9])(/[^\s"\'<>]+\.(?:jpe?g|png|webp|gif|avif)(?:\?[^\s"\'<>]*)?)',
+        r'https?://[^\s"\'<>]+/(?:image|images|photo|photos|upload|uploads|media|file|files)/[^\s"\'<>]+',
+        r'(?<![A-Za-z0-9])(/(?:image|images|photo|photos|upload|uploads|media|file|files)/[^\s"\'<>]+)',
     ]
     for pattern in patterns:
         for match in re.findall(pattern, normalized_html, flags=re.I):
-            raw_candidates.append(match if isinstance(match, str) else str(match))
+            if isinstance(match, tuple):
+                raw_candidates.extend([str(v) for v in match if v])
+            else:
+                raw_candidates.append(str(match))
 
     urls: list[str] = []
     seen: set[str] = set()
     for raw in raw_candidates:
-        raw = raw.strip().split(",")[0].split()[0].strip('"\'')
-        if not raw or raw.startswith("data:"):
-            continue
-        url = urljoin(base_url, raw)
-        lower = url.lower()
-        if any(bad in lower for bad in ("logo", "icon", "sprite", "favicon", "qrcode", "avatar")):
-            continue
-        if not _looks_like_image_url(url):
-            continue
-        if url not in seen:
-            seen.add(url)
-            urls.append(url)
-    return urls
+        for candidate in str(raw).split(","):
+            candidate = candidate.strip().split()[0].strip('"\'')
+            if not candidate or candidate.startswith(("data:", "javascript:", "#")):
+                continue
+            url = urljoin(base_url, candidate)
+            if not _looks_like_image_url(url):
+                continue
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls[:40]
 
+
+async def _verify_official_image_candidates(
+    candidates: list[str],
+    source_page_url: str,
+    limit: int = 4,
+) -> list[str]:
+    """逐一驗證候選 URL 是否真的回傳圖片，避免把 HTML / icon 誤當照片。"""
+    if not candidates:
+        return []
+
+    verified: list[str] = []
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/9.0; +https://travel.tycg.gov.tw/)",
+        "Referer": source_page_url,
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    }
+
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        for url in candidates[:30]:
+            try:
+                # GET 比 HEAD 更可靠，部分站台會拒絕 HEAD。只下載前 96KB 即足以確認 MIME。
+                async with client.stream("GET", url) as response:
+                    if response.status_code >= 400:
+                        continue
+                    content_type = (response.headers.get("content-type") or "").lower()
+                    if not content_type.startswith("image/"):
+                        continue
+                    # 排除極小的裝飾圖；Content-Length 無值時仍先接受。
+                    length = response.headers.get("content-length")
+                    if length:
+                        try:
+                            if int(length) < 8000:
+                                continue
+                        except ValueError:
+                            pass
+                verified.append(str(response.url))
+                if len(verified) >= limit:
+                    break
+            except Exception:
+                continue
+
+    return verified
 
 def _extract_album_links_from_html(html: str, base_url: str) -> list[str]:
     normalized_html = unescape(html or "").replace("\\/", "/")
@@ -1341,12 +1432,7 @@ def _extract_album_links_from_html(html: str, base_url: str) -> list[str]:
 
 async def scrape_official_page_images(record: dict[str, Any] | None) -> list[dict[str, str]]:
     global _last_image_error
-    """從桃園觀光景點頁與其官方相簿頁找圖片。
-
-    舊版只找 <img src> / og:image，桃園觀光站常把圖片藏在 lazy-load、srcset 或
-    內嵌 JSON 的 /image/<id>/<size> 中，因此會得到 0 張；新版把這些格式一起解析，
-    並在景點頁有相簿連結時再進相簿頁抓圖。
-    """
+    """從桃園觀光景點頁、官方相簿頁與大龍門子站抓取並驗證照片。"""
     if not record:
         return []
     source_url = str(record.get("source_url") or "").strip()
@@ -1357,48 +1443,62 @@ async def scrape_official_page_images(record: dict[str, Any] | None) -> list[dic
 
     timeout = httpx.Timeout(14.0, connect=6.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/8.0; +https://travel.tycg.gov.tw/)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/9.0; +https://travel.tycg.gov.tw/)",
         "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
         "Accept": "text/html,application/xhtml+xml",
     }
 
+    record_name = str(record.get("name") or "").strip()
+    page_urls: list[str] = [source_url]
+
+    # 先加入已知官方相簿頁。
+    for key, known_album_url in OFFICIAL_ALBUM_PAGE_MAP.items():
+        if normalize_text(key) in normalize_text(record_name) or normalize_text(record_name) in normalize_text(key):
+            if known_album_url not in page_urls:
+                page_urls.append(known_album_url)
+
+    # 再加入大龍門官方子站；福仁宮頁在搜尋索引中明確包含「照片／環景」。
+    for key, dalongmen_url in OFFICIAL_DALONGMEN_PAGE_MAP.items():
+        if normalize_text(key) in normalize_text(record_name) or normalize_text(record_name) in normalize_text(key):
+            if dalongmen_url not in page_urls:
+                page_urls.append(dalongmen_url)
+
+    fetched_pages: list[tuple[str, str]] = []
+    errors: list[str] = []
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-            response = await client.get(source_url)
-            response.raise_for_status()
-            html = response.text
-
-            page_sets: list[tuple[str, str]] = [(source_url, html)]
-            album_urls = _extract_album_links_from_html(html, source_url)
-            record_name = str(record.get("name") or "").strip()
-            # 某些桃園觀光景點頁的 server-rendered HTML 不會直接列出相簿連結，
-            # 但官方相簿本身存在。已知大溪景點用官方相簿頁補一層，不依賴 OpenAI。
-            for key, known_album_url in OFFICIAL_ALBUM_PAGE_MAP.items():
-                if normalize_text(key) in normalize_text(record_name) or normalize_text(record_name) in normalize_text(key):
-                    if known_album_url not in album_urls:
-                        album_urls.append(known_album_url)
-            for album_url in album_urls[:4]:
+            # 先讀既知頁面；每頁再嘗試找更多官方相簿連結。
+            queue = list(page_urls)
+            seen_pages: set[str] = set()
+            while queue and len(seen_pages) < 8:
+                page_url = queue.pop(0)
+                if page_url in seen_pages:
+                    continue
+                seen_pages.add(page_url)
                 try:
-                    album_response = await client.get(album_url)
-                    album_response.raise_for_status()
-                    page_sets.append((album_url, album_response.text))
+                    response = await client.get(page_url)
+                    response.raise_for_status()
+                    html = response.text
+                    fetched_pages.append((str(response.url), html))
+                    for album_url in _extract_album_links_from_html(html, str(response.url)):
+                        if album_url not in seen_pages and album_url not in queue:
+                            queue.append(album_url)
                 except Exception as exc:
-                    _last_image_error = f"相簿頁：{type(exc).__name__}: {sanitize_error(exc)}"
-                    print(f"⚠️ 官方相簿頁讀取失敗：{album_url}｜{_last_image_error}")
+                    errors.append(f"{page_url} -> {type(exc).__name__}: {sanitize_error(exc)}")
     except Exception as exc:
-        _last_image_error = f"景點頁：{type(exc).__name__}: {sanitize_error(exc)}"
-        print(f"⚠️ 官方景點頁圖片解析失敗：{_last_image_error}")
-        _official_page_image_cache[source_url] = []
-        return []
+        errors.append(f"client -> {type(exc).__name__}: {sanitize_error(exc)}")
 
-    name = str(record.get("name") or "景點")
+    name = record_name or "景點"
     images: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for page_url, page_html in page_sets:
-        for image_url in _extract_image_urls_from_html(page_html, page_url):
-            if image_url in seen:
+    seen_images: set[str] = set()
+
+    for page_url, page_html in fetched_pages:
+        candidates = _extract_image_urls_from_html(page_html, page_url)
+        verified_urls = await _verify_official_image_candidates(candidates, page_url, limit=4)
+        for image_url in verified_urls:
+            if image_url in seen_images:
                 continue
-            seen.add(image_url)
+            seen_images.add(image_url)
             images.append({
                 "image_url": image_url,
                 "thumbnail_url": image_url,
@@ -1407,13 +1507,15 @@ async def scrape_official_page_images(record: dict[str, Any] | None) -> list[dic
             })
             if len(images) >= 4:
                 _official_page_image_cache[source_url] = images
+                _last_image_error = ""
                 return images
 
     _official_page_image_cache[source_url] = images
     if images:
         _last_image_error = ""
-    elif not _last_image_error:
-        _last_image_error = "官方頁面可讀取，但沒有解析到 /image/ 或 lazy-load 圖片網址"
+    else:
+        detail = "；".join(errors[-3:]) if errors else "官方頁面可讀取，但沒有解析到可驗證的 image/* 圖片"
+        _last_image_error = detail
     return images
 
 
@@ -1718,7 +1820,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="8.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="9.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -1773,7 +1875,7 @@ async def image_proxy(url: str = Query(min_length=8, max_length=3000)) -> Respon
     try:
         timeout = httpx.Timeout(15.0, connect=6.0)
         headers = {
-            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/8.0",
+            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/9.0",
             "Referer": "https://travel.tycg.gov.tw/",
         }
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -1803,7 +1905,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "8.0.0",
+        "app_version": "9.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -1822,6 +1924,36 @@ def diagnostics() -> dict[str, Any]:
             if "quota" in (_last_openai_error or "").lower()
             else None
         ),
+    }
+
+
+@app.get("/diagnostics/images")
+async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) -> dict[str, Any]:
+    """安全測試官方照片抓取，不包含任何 API Key。
+
+    例如 /diagnostics/images?name=福仁宮，可直接確認 Render 是否能從
+    桃園官方景點頁／相簿頁抓到並驗證 image/*。
+    """
+    record = await find_official_attraction(name, [name])
+    images = await get_official_images(name, record, [name]) if record else []
+    registered = _register_trusted_images(images)
+    matched_gallery = None
+    for key, gallery_url in OFFICIAL_ALBUM_PAGE_MAP.items():
+        if normalize_text(key) in normalize_text(name) or normalize_text(name) in normalize_text(key):
+            matched_gallery = gallery_url
+            break
+    return {
+        "app_version": "9.0.0",
+        "query": name,
+        "official_record": {
+            "name": record.get("name"),
+            "source_url": record.get("source_url"),
+            "info_id": record.get("info_id"),
+        } if record else None,
+        "official_gallery_url": matched_gallery,
+        "image_count": len(registered),
+        "images": registered,
+        "last_image_error": _last_image_error or None,
     }
 
 
@@ -1891,6 +2023,10 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         for hit in hits
     ]
     official_source = official_source_from_record(official_record)
+    gallery_source = None
+    if wants_images(question):
+        gallery_name = str((official_record or {}).get("name") or (focus_entities[0] if focus_entities else resolved_question))
+        gallery_source = official_album_source_for_name(gallery_name)
     images: list[dict[str, str]] = list(base_images)
     openai_fallback = False
 
@@ -1921,6 +2057,8 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         sources: list[dict[str, Any]] = [*data_sources]
         if official_source:
             sources.append(official_source)
+        if gallery_source and gallery_source.get("url") != (official_source or {}).get("url"):
+            sources.append(gallery_source)
         seen_source_urls = {source.get("url") for source in sources if isinstance(source, dict) and source.get("url")}
         for source in web_sources:
             if source.get("url") not in seen_source_urls:
@@ -1949,7 +2087,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
                     route_records=route_records,
                 )
                 mode = "openai-rag"
-                sources = [*data_sources, *([official_source] if official_source else [])]
+                sources = [*data_sources, *([official_source] if official_source else []), *([gallery_source] if gallery_source else [])]
                 images = _register_trusted_images(list(base_images))
             except Exception as second_exc:
                 _last_openai_error = f"{type(second_exc).__name__}: {sanitize_error(second_exc)}"
@@ -1962,7 +2100,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
                     nearby_records=nearby_records,
                     route_records=route_records,
                 )
-                sources = [*data_sources, *([official_source] if official_source else [])]
+                sources = [*data_sources, *([official_source] if official_source else []), *([gallery_source] if gallery_source else [])]
                 images = _register_trusted_images(list(base_images))
                 mode = "local-rag"
         else:
@@ -1974,7 +2112,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
                 nearby_records=nearby_records,
                 route_records=route_records,
             )
-            sources = [*data_sources, *([official_source] if official_source else [])]
+            sources = [*data_sources, *([official_source] if official_source else []), *([gallery_source] if gallery_source else [])]
             images = _register_trusted_images(list(base_images))
             mode = "local-rag"
 
@@ -2008,7 +2146,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "8.0.0",
+            "app_version": "9.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),
