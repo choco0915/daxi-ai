@@ -248,5 +248,70 @@ class ConversationAndOfficialFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("multimedia/album/3431", source["url"])
 
 
+class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        app.build_search_index()
+
+    def setUp(self) -> None:
+        self.old_consume_cache = list(app._official_consume_cache)
+        self.old_consume_at = app._official_consume_cache_at
+        app._official_consume_cache = [
+            {
+                "id": "1947",
+                "entity_type": "consume",
+                "name": "陳媽媽月光餅",
+                "summary": "桃園觀光官方月光餅店家摘要",
+                "description": "以月光餅為招牌的官方消費資訊。",
+                "address": "桃園市大溪區和平路87號",
+                "open_time": "09:00-18:00",
+                "tel": "03-3882451",
+                "pictures": [],
+                "source_url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/1947",
+            }
+        ]
+        app._official_consume_cache_at = time.time()
+
+    def tearDown(self) -> None:
+        app._official_consume_cache = self.old_consume_cache
+        app._official_consume_cache_at = self.old_consume_at
+
+    async def test_unknown_kb_term_can_match_official_consume(self) -> None:
+        record = await app.find_official_entity("月光餅", [])
+        self.assertIsNotNone(record)
+        self.assertEqual(record["name"], "陳媽媽月光餅")
+        self.assertEqual(record["entity_type"], "consume")
+
+    async def test_consume_record_beats_broad_kb_chapter(self) -> None:
+        hits = app.retrieve("月光餅")
+        record = await app.find_official_entity("月光餅", [])
+        answer = app.local_rag_answer("月光餅", hits, record)
+        self.assertIn("陳媽媽月光餅", answer)
+        self.assertIn("和平路87號", answer)
+
+    def test_public_results_beat_broad_kb_when_no_direct_topic(self) -> None:
+        hits = app.retrieve("月光餅")
+        self.assertFalse(app.has_direct_kb_topic("月光餅", hits))
+        answer = app.local_rag_answer(
+            "月光餅",
+            hits,
+            None,
+            public_results=[{
+                "title": "陳媽媽月光餅 - 桃園觀光導覽網",
+                "url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/1947",
+                "domain": "travel.tycg.gov.tw",
+                "snippet": "月光餅是大溪老街的特色食品之一。",
+            }],
+        )
+        self.assertIn("網路補充", answer)
+        self.assertIn("月光餅", answer)
+
+    def test_external_topic_can_continue_to_photo(self) -> None:
+        resolved, focus = app.resolve_question("照片", [], [], ["陳媽媽月光餅"])
+        self.assertEqual(focus, ["陳媽媽月光餅"])
+        self.assertIn("陳媽媽月光餅", resolved)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

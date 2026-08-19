@@ -81,3 +81,25 @@ https://你的網站.onrender.com/diagnostics
 ```
 
 會回傳官方景點匹配、官方相簿 URL、驗證成功的圖片數量與最近一次圖片錯誤，不包含任何 API Key。
+
+## V10：data.md 外部名詞搜尋
+
+V10 保留既有 RAG、照片、附近景點、行程與對話記憶，新增「外部實體搜尋」。
+
+搜尋順序：
+
+1. `data.md` 直接主題命中。
+2. 桃園觀光官方「景點 Open Data」。
+3. 桃園觀光官方「消費／美食 Open Data」（店家、食品、伴手禮）。
+4. 若官方 Open Data 仍找不到，使用公開網路搜尋；搜尋順序優先 `travel.tycg.gov.tw`、`tycg.gov.tw`、`taiwan.net.tw`，最後才補一般網路結果。
+5. OpenAI API 有額度時，可再由 Responses API Web Search 補充；若 API 額度不足，前四層仍可獨立工作。
+
+因此像「月光餅」即使沒有 `data.md` 的獨立章節，也可以命中桃園觀光的消費／美食官方資料；如果官方 Open Data 沒收錄其他新名詞，系統還會進一步搜尋公開網路，而不是直接拒答。
+
+安全診斷：
+
+```text
+/diagnostics/search?name=月光餅
+```
+
+可以查看該名詞是否由 data.md、官方實體資料或公開網路結果命中，不會顯示 API Key。

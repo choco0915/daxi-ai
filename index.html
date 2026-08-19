@@ -1282,6 +1282,9 @@
                         modeChip.textContent = "🌐 官方網路 + AI RAG";
                     } else if (mode === "openai-rag") {
                         modeChip.textContent = "🤖 AI RAG";
+                    } else if (mode === "local-web") {
+                        modeChip.textContent = "🌐 官方／網路備援";
+                        modeChip.title = "OpenAI 本輪未使用，但已由官方 Open Data 或公開網路結果補充";
                     } else {
                         modeChip.textContent = "🧩 本地備援";
                         modeChip.title = "OpenAI 本輪未成功使用；可開啟 /diagnostics 查看安全診斷資訊";
@@ -1600,6 +1603,8 @@
                     setBusy(false, "🌐 豆干弟已參考官方網路資料");
                 } else if (data.mode === "openai-rag") {
                     setBusy(false, "✨ 豆干弟導覽完成");
+                } else if (data.mode === "local-web") {
+                    setBusy(false, "🌐 使用官方／公開網路資料補充");
                 } else {
                     setBusy(false, "📚 使用 data.md＋官方資料備援回答");
                 }

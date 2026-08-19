@@ -8,7 +8,7 @@ from html import unescape
 from collections import Counter, defaultdict, deque
 from contextlib import asynccontextmanager
 from typing import Any, Literal
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse, parse_qs, unquote
 
 import httpx
 
@@ -40,6 +40,10 @@ MIN_RETRIEVAL_SCORE = 0.08
 MAX_HISTORY_TURNS = 10
 STORYMAP_URL = "https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27"
 TYCG_ATTRACTIONS_OPEN_DATA = "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAttractions"
+TYCG_CONSUME_OPEN_DATA_CANDIDATES = (
+    "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGConsume",
+    "https://travel.tycg.gov.tw/zh-tw/OpenData/Consume",
+)
 TYCG_ALBUM_OPEN_DATA_CANDIDATES = (
     "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAlbum",
     "https://travel.tycg.gov.tw/zh-tw/OpenData/Album",
@@ -200,6 +204,8 @@ SYSTEM_INSTRUCTIONS = """你是「豆干弟」，一位親切、自然、熟悉�
 【資料來源規則】
 5. data.md 是主要在地知識來源。穩定的歷史、文化、景點背景優先依 data.md。
 6. 若本次有啟用網路搜尋，可以用官方網站補充較新的資訊或 data.md 沒寫到的細節；優先桃園市政府、桃園觀光、大溪木藝生態博物館、大溪大禧、交通部觀光署及指定 StoryMap。
+6-1. 若使用者詢問的名詞在 data.md 沒有獨立章節（例如店家、食品、伴手禮），但官方 Open Data 或公開網路搜尋有可靠結果，必須直接回答該名詞，不要因為 data.md 沒有專章就拒答。
+6-2. 外部搜尋結果與 data.md 要明確分工：data.md 有內容就優先；data.md 不足的部分才由官方資料或公開網路補充。
 7. 網路資料與 data.md 若有差異，對會變動的資訊（開放時間、活動、交通、現況）以官方網站較新的資訊為準；歷史文化敘述則避免擅自推翻 data.md，必要時指出來源差異。
 8. 不可捏造沒有出現在 data.md 或網路來源中的事實。
 
@@ -242,6 +248,9 @@ doc_norms: list[float] = []
 kb_mtime: float | None = None
 _official_attractions_cache: list[dict[str, Any]] = []
 _official_attractions_cache_at: float = 0.0
+_official_consume_cache: list[dict[str, Any]] = []
+_official_consume_cache_at: float = 0.0
+_public_search_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
 _official_page_image_cache: dict[str, list[dict[str, str]]] = {}
 _official_album_cache: list[dict[str, Any]] = []
 _official_album_cache_at: float = 0.0
@@ -839,9 +848,11 @@ def local_rag_answer(
     available_images: list[dict[str, str]] | None = None,
     nearby_records: list[dict[str, Any]] | None = None,
     route_records: list[dict[str, Any]] | None = None,
+    public_results: list[dict[str, str]] | None = None,
 ) -> str:
     nearby_records = nearby_records or []
     route_records = route_records or []
+    public_results = public_results or []
 
     # 這兩類追問應優先吃「上一輪主題 + 官方資料」，不能先被 hits 是否存在擋掉。
     if wants_nearby(question) and nearby_records:
@@ -864,6 +875,33 @@ def local_rag_answer(
             "你可以點下方的官方來源頁；新版也會把這次圖片抓取失敗原因寫進診斷資訊，方便直接排查。"
         )
 
+    # data.md 沒有獨立章節，但桃園官方「消費／美食」有直接命中的實體時，
+    # 例如「月光餅 → 陳媽媽月光餅」，應優先回答官方實體，而不是退回寬泛的美食章節。
+    if official_record and official_record.get("entity_type") == "consume":
+        name = str(official_record.get("name") or title)
+        q_norm = normalize_text(question)
+        n_norm = normalize_text(name)
+        direct_match = (q_norm and q_norm in n_norm) or (n_norm and n_norm in q_norm)
+        if direct_match or not hits or wants_detail(question):
+            paragraphs = [f"🍴 **{name}**"]
+            detail = str(official_record.get("description") or official_record.get("summary") or "").strip()
+            if detail:
+                paragraphs.append(detail)
+            extras: list[str] = []
+            if official_record.get("address"):
+                extras.append(f"📍 **地址**：{official_record['address']}")
+            if official_record.get("open_time"):
+                extras.append(f"🕒 **營業／開放資訊**：{official_record['open_time']}")
+            if official_record.get("tel"):
+                extras.append(f"☎️ **電話**：{official_record['tel']}")
+            if extras:
+                paragraphs.append("\n".join(extras))
+            if len(paragraphs) == 1 and public_results:
+                external = local_external_answer(question, public_results)
+                if external:
+                    paragraphs.append(external)
+            return "\n\n".join(paragraphs).strip()
+
     # 即使 data.md 沒有該景點，只要官方資料有，就仍可延續上一輪做深入介紹。
     if wants_detail(question) and official_record:
         data_body = clean_markdown_for_local(hits[0]["text"]) if hits else ""
@@ -885,14 +923,24 @@ def local_rag_answer(
             paragraphs.append("\n".join(extras))
         return "\n\n".join(paragraphs).strip()
 
+    # data.md 只有寬泛章節、沒有直接命中這個新名詞時，外部搜尋結果要優先於寬泛 RAG。
+    # 例如問「月光餅」不應只回「傳統甜品與小吃」整章，而應直接顯示月光餅的官方／網路結果。
+    if public_results and not has_direct_kb_topic(question, hits):
+        external = local_external_answer(question, public_results)
+        if external:
+            return external
+
     if not hits:
         if official_record:
             detail = str(official_record.get("summary") or official_record.get("description") or "").strip()
             if detail:
                 return f"🏮 **{title}**\n\n{detail}"
+        external = local_external_answer(question, public_results)
+        if external:
+            return external
         return (
-            f"😅 這題目前資料庫與已取得的官方資料都還不足以可靠回答「{question}」。\n\n"
-            "你可以直接指定景點名稱，或說「查官方資料」，豆干弟再繼續找。"
+            f"😅 這題目前 data.md、桃園官方資料與公開網路搜尋都還沒有取得足夠可靠內容來回答「{question}」。\n\n"
+            "你可以換一個更完整的名稱，豆干弟會再從官方網站優先搜尋。"
         )
 
     if len(hits) == 1:
@@ -1008,7 +1056,7 @@ async def find_official_attraction(query: str, focus_entities: list[str] | None 
     records = await load_official_attractions()
     if not records:
         return None
-    candidate_queries = [*(focus_entities or []), query]
+    candidate_queries = entity_query_variants(query, focus_entities)
     best: tuple[float, dict[str, Any] | None] = (0.0, None)
     for record in records:
         name = str(record.get("name", ""))
@@ -1016,6 +1064,272 @@ async def find_official_attraction(query: str, focus_entities: list[str] | None 
         if score > best[0]:
             best = (score, record)
     return best[1] if best[0] >= 60 else None
+
+
+async def load_official_consumes() -> list[dict[str, Any]]:
+    """讀取桃園觀光導覽網「消費／美食」官方 Open Data。
+
+    這層專門補 data.md 沒有建立獨立章節的店家、食品與伴手禮，
+    例如「月光餅」。不依賴 OpenAI API 額度。
+    """
+    global _official_consume_cache, _official_consume_cache_at, _last_official_error
+    now = time.time()
+    if _official_consume_cache and now - _official_consume_cache_at < OFFICIAL_CACHE_SECONDS:
+        return _official_consume_cache
+
+    root: ET.Element | None = None
+    errors: list[str] = []
+    timeout = httpx.Timeout(12.0, connect=6.0)
+    headers = {"User-Agent": "Mozilla/5.0 Daxi-AI-Guide/10.0"}
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        for endpoint in TYCG_CONSUME_OPEN_DATA_CANDIDATES:
+            try:
+                response = await client.get(endpoint)
+                response.raise_for_status()
+                root = ET.fromstring(response.content)
+                if root is not None:
+                    break
+            except Exception as exc:
+                errors.append(f"{endpoint}: {type(exc).__name__}: {sanitize_error(exc)}")
+
+    if root is None:
+        if errors:
+            _last_official_error = " | ".join(errors[-2:])
+        return _official_consume_cache
+
+    records: list[dict[str, Any]] = []
+    for element in root.iter():
+        name = _xml_child_text(element, "Name")
+        if not name:
+            continue
+        record_id = _xml_child_text(element, "Id", "ID", "InfoId", "InfoID")
+        ty_website = _xml_child_text(element, "TYWebsite")
+        source_url = ty_website or (
+            f"https://travel.tycg.gov.tw/zh-tw/Consume/Detail/{record_id}" if record_id else "https://travel.tycg.gov.tw/zh-tw/consume/list"
+        )
+        pictures: list[dict[str, str]] = []
+        for i in range(1, 4):
+            image_url = _xml_child_text(element, f"Picture{i}", f"PictureUrl{i}", f"PictureURL{i}")
+            if image_url:
+                pictures.append({
+                    "image_url": image_url,
+                    "thumbnail_url": image_url,
+                    "source_url": source_url,
+                    "caption": _xml_child_text(element, f"Picdescribe{i}", f"PictureDescription{i}") or f"{name}｜桃園觀光導覽網官方照片",
+                })
+        records.append({
+            "id": record_id,
+            "entity_type": "consume",
+            "name": name,
+            "summary": _xml_child_text(element, "Toldescribe"),
+            "description": _xml_child_text(element, "Description", "Description1"),
+            "address": _xml_child_text(element, "Add", "Address"),
+            "open_time": _xml_child_text(element, "Opentime", "OpenTime"),
+            "tel": _xml_child_text(element, "Tel", "Telephone"),
+            "website": _xml_child_text(element, "Website"),
+            "ty_website": ty_website,
+            "px": _xml_child_text(element, "Px", "Longitude"),
+            "py": _xml_child_text(element, "Py", "Latitude"),
+            "pictures": pictures,
+            "source_url": source_url,
+        })
+
+    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    for record in records:
+        key = (str(record.get("id") or ""), str(record.get("name") or ""))
+        if key not in unique:
+            unique[key] = record
+    _official_consume_cache = list(unique.values())
+    _official_consume_cache_at = now
+    if _official_consume_cache:
+        print(f"🍴 桃園觀光官方消費 Open Data 載入：{len(_official_consume_cache)} 筆")
+    return _official_consume_cache
+
+
+def entity_query_variants(query: str, focus_entities: list[str] | None = None) -> list[str]:
+    variants: list[str] = [*(focus_entities or []), query]
+    cleaned = re.sub(r"[|｜].*$", "", query).strip()
+    for phrase in (
+        "請問", "可以", "幫我", "介紹一下", "詳細介紹", "深入介紹", "介紹",
+        "是什麼", "是甚麼", "有什麼特色", "有什麼", "照片", "圖片", "相片",
+        "更多資訊", "詳細一點", "再詳細一點",
+    ):
+        cleaned = cleaned.replace(phrase, " ")
+    cleaned = re.sub(r"[？?！!，,。\s]+", " ", cleaned).strip()
+    if cleaned:
+        variants.append(cleaned)
+    return list(dict.fromkeys(v for v in variants if v))
+
+
+async def find_official_consume(query: str, focus_entities: list[str] | None = None) -> dict[str, Any] | None:
+    records = await load_official_consumes()
+    if not records:
+        return None
+    candidate_queries = entity_query_variants(query, focus_entities)
+    best: tuple[float, dict[str, Any] | None] = (0.0, None)
+    for record in records:
+        name = str(record.get("name", ""))
+        score = max((attraction_match_score(candidate, name) for candidate in candidate_queries if candidate), default=0.0)
+        # 消費資料名稱常是「陳媽媽月光餅」，查「月光餅」也應視為高可信直接命中。
+        nn = normalize_text(name)
+        for candidate in candidate_queries:
+            qn = normalize_text(candidate)
+            if qn and len(qn) >= 2 and qn in nn:
+                score = max(score, 78.0)
+        if score > best[0]:
+            best = (score, record)
+    return best[1] if best[0] >= 60 else None
+
+
+async def find_official_entity(query: str, focus_entities: list[str] | None = None) -> dict[str, Any] | None:
+    """景點與美食／店家都當成可延續的官方實體。
+
+    優先沿用 focus entity；若 data.md 沒有該名詞，仍可由桃園官方資料命中。
+    """
+    attraction = await find_official_attraction(query, focus_entities)
+    consume = await find_official_consume(query, focus_entities)
+    if attraction and consume:
+        candidates = [*(focus_entities or []), query]
+        a_score = max(attraction_match_score(c, str(attraction.get("name") or "")) for c in candidates if c)
+        c_score = max(attraction_match_score(c, str(consume.get("name") or "")) for c in candidates if c)
+        return consume if c_score > a_score else attraction
+    return attraction or consume
+
+
+def _strip_html_text(raw_html: str) -> str:
+    text = re.sub(r"(?is)<(script|style|noscript).*?>.*?</\1>", " ", raw_html)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _decode_ddg_result_url(url: str) -> str:
+    if not url:
+        return ""
+    full = urljoin("https://duckduckgo.com", unescape(url))
+    parsed = urlparse(full)
+    if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
+        values = parse_qs(parsed.query).get("uddg") or []
+        if values:
+            return unquote(values[0])
+    return full
+
+
+async def public_web_search(query: str, limit: int = 5) -> list[dict[str, str]]:
+    """OpenAI 額度不足時的公開網路搜尋備援。
+
+    先以桃園市政府、桃園觀光與交通部觀光署官方網域搜尋；官方找不到時
+    才做一般網路搜尋。結果只使用搜尋結果標題／摘要與原始網址，不假裝是 data.md。
+    """
+    key = normalize_text(query)
+    cached = _public_search_cache.get(key)
+    if cached and time.time() - cached[0] < OFFICIAL_CACHE_SECONDS:
+        return cached[1][:limit]
+
+    clean_query = re.sub(r"[|｜].*$", "", query).strip()
+    search_queries = [
+        f'site:travel.tycg.gov.tw 大溪 "{clean_query}"',
+        f'site:tycg.gov.tw 大溪 "{clean_query}"',
+        f'site:taiwan.net.tw 大溪 "{clean_query}"',
+        f'大溪 "{clean_query}"',
+    ]
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+        "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.7",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+            for search_query in search_queries:
+                if len(results) >= limit:
+                    break
+                try:
+                    response = await client.get("https://html.duckduckgo.com/html/", params={"q": search_query})
+                    response.raise_for_status()
+                    html = response.text
+                except Exception:
+                    continue
+
+                # DuckDuckGo HTML 版：每個 result 區塊包含 result__a / result__snippet。
+                blocks = re.findall(r'(?is)<div[^>]+class="[^"]*result[^"]*"[^>]*>(.*?)</div>\s*</div>', html)
+                if not blocks:
+                    blocks = re.findall(r'(?is)<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html)
+                    for href, title_html in blocks:
+                        url = _decode_ddg_result_url(href)
+                        if not url or url in seen:
+                            continue
+                        seen.add(url)
+                        host = urlparse(url).netloc.replace("www.", "")
+                        results.append({"type": "web", "title": _strip_html_text(title_html), "url": url, "domain": host, "snippet": ""})
+                        if len(results) >= limit:
+                            break
+                    continue
+
+                for block in blocks:
+                    link_match = re.search(r'(?is)<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block)
+                    if not link_match:
+                        continue
+                    url = _decode_ddg_result_url(link_match.group(1))
+                    if not url or url in seen or not url.startswith(("http://", "https://")):
+                        continue
+                    snippet_match = re.search(r'(?is)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>|<div[^>]+class="result__snippet"[^>]*>(.*?)</div>', block)
+                    snippet_html = (snippet_match.group(1) or snippet_match.group(2)) if snippet_match else ""
+                    seen.add(url)
+                    host = urlparse(url).netloc.replace("www.", "")
+                    results.append({
+                        "type": "web",
+                        "title": _strip_html_text(link_match.group(2)) or host,
+                        "url": url,
+                        "domain": host,
+                        "snippet": _strip_html_text(snippet_html),
+                    })
+                    if len(results) >= limit:
+                        break
+    except Exception:
+        pass
+
+    # 官方來源永遠排前面；其次才是一般網路結果。
+    def official_rank(item: dict[str, str]) -> tuple[int, int]:
+        host = item.get("domain", "").lower()
+        official = any(host == d or host.endswith("." + d) for d in OFFICIAL_WEB_DOMAINS)
+        return (0 if official else 1, 0)
+
+    results.sort(key=official_rank)
+    _public_search_cache[key] = (time.time(), results[:limit])
+    return results[:limit]
+
+
+def build_public_search_context(results: list[dict[str, str]]) -> str:
+    if not results:
+        return "（沒有額外公開網路搜尋結果）"
+    blocks: list[str] = []
+    for item in results[:5]:
+        snippet = item.get("snippet", "").strip()
+        blocks.append(
+            f"標題：{item.get('title', '')}\n網址：{item.get('url', '')}"
+            + (f"\n摘要：{snippet}" if snippet else "")
+        )
+    return "\n\n---\n\n".join(blocks)
+
+
+def local_external_answer(query: str, results: list[dict[str, str]]) -> str:
+    if not results:
+        return ""
+    clean_query = re.sub(r"[|｜].*$", "", query).strip()
+    lines = [f"🌐 **{clean_query}｜網路補充**"]
+    for item in results[:3]:
+        title = item.get("title") or item.get("domain") or "相關資料"
+        snippet = item.get("snippet", "").strip()
+        if snippet:
+            if len(snippet) > 220:
+                snippet = snippet[:220].rstrip() + "…"
+            lines.append(f"**{title}**\n{snippet}")
+        else:
+            lines.append(f"**{title}**\n可從下方來源連結查看完整內容。")
+    return "\n\n".join(lines)
 
 
 def _safe_float(value: Any) -> float | None:
@@ -1076,7 +1390,7 @@ async def find_official_records_for_entities(entities: list[str]) -> list[dict[s
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
     for entity in entities[:6]:
-        record = await find_official_attraction(entity, [entity])
+        record = await find_official_entity(entity, [entity])
         if not record:
             continue
         key = str(record.get("id") or record.get("name") or "")
@@ -1123,7 +1437,7 @@ def build_official_context(record: dict[str, Any] | None) -> str:
     if not record:
         return "（本輪未取得桃園觀光官方景點資料）"
     fields = [
-        f"景點：{record.get('name', '')}",
+        f"官方實體：{record.get('name', '')}",
         f"簡介：{record.get('summary', '')}" if record.get("summary") else "",
         f"詳細描述：{record.get('description', '')}" if record.get("description") else "",
         f"地址：{record.get('address', '')}" if record.get("address") else "",
@@ -1152,7 +1466,7 @@ def official_source_from_record(record: dict[str, Any] | None) -> dict[str, str]
         return None
     return {
         "type": "web",
-        "title": f"桃園觀光導覽網｜{record.get('name', '景點')}",
+        "title": f"桃園觀光導覽網｜{record.get('name', '官方資料')}",
         "url": str(record["source_url"]),
         "domain": "travel.tycg.gov.tw",
     }
@@ -1245,7 +1559,7 @@ async def load_official_albums() -> list[dict[str, Any]]:
         return _official_album_cache
 
     timeout = httpx.Timeout(12.0, connect=6.0)
-    headers = {"User-Agent": "Daxi-AI-Guide/9.0"}
+    headers = {"User-Agent": "Daxi-AI-Guide/10.0"}
     root: ET.Element | None = None
     used_url = ""
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -1381,7 +1695,7 @@ async def _verify_official_image_candidates(
     verified: list[str] = []
     timeout = httpx.Timeout(10.0, connect=5.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/9.0; +https://travel.tycg.gov.tw/)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/10.0; +https://travel.tycg.gov.tw/)",
         "Referer": source_page_url,
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
     }
@@ -1443,7 +1757,7 @@ async def scrape_official_page_images(record: dict[str, Any] | None) -> list[dic
 
     timeout = httpx.Timeout(14.0, connect=6.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/9.0; +https://travel.tycg.gov.tw/)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/10.0; +https://travel.tycg.gov.tw/)",
         "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
         "Accept": "text/html,application/xhtml+xml",
     }
@@ -1583,6 +1897,37 @@ def should_use_web(question: str, hits: list[dict[str, Any]], resolved_question:
     return hits[0]["score"] < 0.22
 
 
+def has_direct_kb_topic(question: str, hits: list[dict[str, Any]]) -> bool:
+    """判斷問題是否直接命中 data.md 的章節主題，而不是只在正文偶然出現。"""
+    q = normalize_text(re.sub(r"[|｜].*$", "", question))
+    if not q:
+        return False
+    for hit in hits:
+        title = normalize_text(str(hit.get("title") or ""))
+        if title and (title == q or title in q or (q in title and len(q) >= 3)):
+            return True
+    return False
+
+
+def should_discover_external(question: str, hits: list[dict[str, Any]], focus_entities: list[str] | None = None) -> bool:
+    """data.md 沒有獨立主題時，允許豆干弟往官方資料／公開網路擴充。
+
+    這解決「AI 前面推薦了月光餅，但 data.md 沒有月光餅專章，所以追問時搜尋不到」的問題。
+    """
+    if not WEB_SEARCH_ENABLED:
+        return False
+    if not hits:
+        return True
+    if focus_entities and all(not extract_known_titles(entity) for entity in focus_entities):
+        return True
+    if not has_direct_kb_topic(question, hits):
+        # 短名詞、店家名、食品名最需要外部實體搜尋；較長的一般問題則交由既有 RAG。
+        clean = normalize_text(re.sub(r"[|｜].*$", "", question))
+        if 2 <= len(clean) <= 28:
+            return True
+    return False
+
+
 def web_tool_config(include_images: bool = False, detailed: bool = False) -> dict[str, Any]:
     tool: dict[str, Any] = {
         "type": "web_search",
@@ -1691,6 +2036,7 @@ async def openai_rag_answer(
     official_record: dict[str, Any] | None = None,
     nearby_records: list[dict[str, Any]] | None = None,
     route_records: list[dict[str, Any]] | None = None,
+    public_results: list[dict[str, str]] | None = None,
 ) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
     global _openai_quota_blocked_until
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
@@ -1706,6 +2052,8 @@ async def openai_rag_answer(
     nearby_records = nearby_records or []
     route_records = route_records or []
     supplemental_official_context = build_official_records_context(nearby_records or route_records)
+    public_results = public_results or []
+    public_context = build_public_search_context(public_results)
     detailed = wants_detail(question)
     include_images = wants_images(question)
 
@@ -1734,6 +2082,7 @@ async def openai_rag_answer(
         f"最近對話：\n{history_context}\n\n"
         f"桃園觀光官方 Open Data（目前主題）：\n{official_context}\n\n"
         f"附近／路線用的官方景點資料（若有）：\n{supplemental_official_context}\n\n"
+        f"額外公開網路搜尋結果（data.md 沒有獨立主題時才用；官方來源優先）：\n{public_context}\n\n"
         "本輪 data.md 高相關片段（只使用真正與問題有關的片段；不要因片段順帶提到其他景點就展開）：\n\n"
         f"{context}\n\n"
         "回答時先把『已解析問題』完整答好。若本次有 web_search，網路只用來補充同一主題或核對會變動資訊，"
@@ -1820,7 +2169,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="9.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="10.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -1875,7 +2224,7 @@ async def image_proxy(url: str = Query(min_length=8, max_length=3000)) -> Respon
     try:
         timeout = httpx.Timeout(15.0, connect=6.0)
         headers = {
-            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/9.0",
+            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/10.0",
             "Referer": "https://travel.tycg.gov.tw/",
         }
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -1905,7 +2254,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "9.0.0",
+        "app_version": "10.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -1915,7 +2264,9 @@ def diagnostics() -> dict[str, Any]:
         "last_official_error": _last_official_error or None,
         "last_image_error": _last_image_error or None,
         "official_attractions_cached": len(_official_attractions_cache),
+        "official_consumes_cached": len(_official_consume_cache),
         "official_albums_cached": len(_official_album_cache),
+        "public_search_cache_entries": len(_public_search_cache),
         "trusted_images_cached": len(_trusted_image_urls),
         "openai_quota_blocked": time.time() < _openai_quota_blocked_until,
         "server_conversations_cached": len(_conversation_states),
@@ -1927,6 +2278,26 @@ def diagnostics() -> dict[str, Any]:
     }
 
 
+@app.get("/diagnostics/search")
+async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) -> dict[str, Any]:
+    """測試 data.md 以外名詞的官方／公開網路搜尋。"""
+    hits = retrieve(name)
+    record = await find_official_entity(name, [name])
+    public_results = [] if record else await public_web_search(name, limit=5)
+    return {
+        "app_version": "10.0.0",
+        "query": name,
+        "direct_kb_topic": has_direct_kb_topic(name, hits),
+        "kb_titles": [hit.get("title") for hit in hits],
+        "official_entity": {
+            "name": record.get("name"),
+            "entity_type": record.get("entity_type") or "attraction",
+            "source_url": record.get("source_url"),
+        } if record else None,
+        "public_results": public_results,
+    }
+
+
 @app.get("/diagnostics/images")
 async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) -> dict[str, Any]:
     """安全測試官方照片抓取，不包含任何 API Key。
@@ -1934,7 +2305,7 @@ async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) ->
     例如 /diagnostics/images?name=福仁宮，可直接確認 Render 是否能從
     桃園官方景點頁／相簿頁抓到並驗證 image/*。
     """
-    record = await find_official_attraction(name, [name])
+    record = await find_official_entity(name, [name])
     images = await get_official_images(name, record, [name]) if record else []
     registered = _register_trusted_images(images)
     matched_gallery = None
@@ -1943,7 +2314,7 @@ async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) ->
             matched_gallery = gallery_url
             break
     return {
-        "app_version": "9.0.0",
+        "app_version": "10.0.0",
         "query": name,
         "official_record": {
             "name": record.get("name"),
@@ -1983,12 +2354,19 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
     )
     hits = retrieve(resolved_question, focus_entities=focus_entities)
     use_web = should_use_web(question, hits, resolved_question)
+    discover_external = should_discover_external(resolved_question, hits, focus_entities)
 
-    # 只要是追問目前景點（詳細／照片／附近）或路線，都先解析出官方景點記錄。
-    # 這條路徑不依賴 OpenAI，所以 OpenAI 掛掉時「附近」「路線」仍能延續。
+    # V10：官方實體不再只有「景點」。桃園觀光的美食／消費 Open Data 也納入，
+    # 所以「月光餅、某家豆花、某店家」即使 data.md 沒有獨立章節，也可以直接被搜尋與延續。
     official_record: dict[str, Any] | None = None
-    if use_web or wants_detail(question) or wants_images(question) or wants_nearby(question) or is_route_request(question):
-        official_record = await find_official_attraction(resolved_question, focus_entities)
+    if use_web or discover_external or wants_detail(question) or wants_images(question) or wants_nearby(question) or is_route_request(question):
+        official_record = await find_official_entity(resolved_question, focus_entities)
+
+    # OpenAI API 沒額度時仍要能搜尋 data.md 外的名詞：
+    # 官方 Open Data 找不到才使用公開搜尋，且結果排序仍以官方網域優先。
+    public_results: list[dict[str, str]] = []
+    if WEB_SEARCH_ENABLED and (discover_external or not hits) and (official_record is None or wants_detail(question)):
+        public_results = await public_web_search(resolved_question, limit=5)
 
     nearby_records: list[dict[str, Any]] = []
     if wants_nearby(question) and official_record:
@@ -2040,6 +2418,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
             official_record=official_record,
             nearby_records=nearby_records,
             route_records=route_records,
+            public_results=public_results,
         )
         _last_openai_error = ""
         merged_images: list[dict[str, str]] = []
@@ -2064,6 +2443,15 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
             if source.get("url") not in seen_source_urls:
                 sources.append(source)
                 seen_source_urls.add(source.get("url"))
+        for source in public_results:
+            if source.get("url") and source.get("url") not in seen_source_urls:
+                sources.append({
+                    "type": "web",
+                    "title": source.get("title") or source.get("domain") or "公開網路來源",
+                    "url": source.get("url", ""),
+                    "domain": source.get("domain", ""),
+                })
+                seen_source_urls.add(source.get("url"))
         print(
             f"✅ 回答完成｜原問：{question}｜解析：{resolved_question}｜"
             f"RAG：{', '.join(hit['title'] for hit in hits) or 'none'}｜web={bool(web_sources)}｜images={len(images)}"
@@ -2085,6 +2473,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
                     official_record=official_record,
                     nearby_records=nearby_records,
                     route_records=route_records,
+                    public_results=public_results,
                 )
                 mode = "openai-rag"
                 sources = [*data_sources, *([official_source] if official_source else []), *([gallery_source] if gallery_source else [])]
@@ -2099,10 +2488,17 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
                     base_images,
                     nearby_records=nearby_records,
                     route_records=route_records,
+                    public_results=public_results,
                 )
                 sources = [*data_sources, *([official_source] if official_source else []), *([gallery_source] if gallery_source else [])]
+                sources.extend({
+                    "type": "web",
+                    "title": item.get("title") or item.get("domain") or "公開網路來源",
+                    "url": item.get("url", ""),
+                    "domain": item.get("domain", ""),
+                } for item in public_results if item.get("url"))
                 images = _register_trusted_images(list(base_images))
-                mode = "local-rag"
+                mode = "local-web" if (public_results or official_record) else "local-rag"
         else:
             answer = local_rag_answer(
                 question,
@@ -2111,10 +2507,17 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
                 base_images,
                 nearby_records=nearby_records,
                 route_records=route_records,
+                public_results=public_results,
             )
             sources = [*data_sources, *([official_source] if official_source else []), *([gallery_source] if gallery_source else [])]
+            sources.extend({
+                "type": "web",
+                "title": item.get("title") or item.get("domain") or "公開網路來源",
+                "url": item.get("url", ""),
+                "domain": item.get("domain", ""),
+            } for item in public_results if item.get("url"))
             images = _register_trusted_images(list(base_images))
-            mode = "local-rag"
+            mode = "local-web" if (public_results or official_record) else "local-rag"
 
     # active_topics 只代表「目前正在聊的核心主題」。
     # 問附近後仍保留原景點；推薦清單另存在 recommendations，使用者才能下一句說「第二個」。
@@ -2122,6 +2525,8 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         active_topics = list(dict.fromkeys(focus_entities))[:5]
     elif official_record and official_record.get("name"):
         active_topics = [str(official_record["name"])]
+    elif public_results:
+        active_topics = [re.sub(r"[|｜].*$", "", question).strip()]
     elif hits:
         active_topics = [hits[0]["title"]]
     else:
@@ -2146,11 +2551,13 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "9.0.0",
+            "app_version": "10.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),
             "route_count": len(route_records),
+            "public_search_count": len(public_results),
+            "official_entity_type": (official_record or {}).get("entity_type") or ("attraction" if official_record else None),
         },
     }
 
