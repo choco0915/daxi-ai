@@ -1,3 +1,7 @@
+import asyncio
+import csv
+import io
+import json
 import math
 import os
 import re
@@ -40,10 +44,20 @@ MIN_RETRIEVAL_SCORE = 0.08
 MAX_HISTORY_TURNS = 10
 STORYMAP_URL = "https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27"
 TYCG_ATTRACTIONS_OPEN_DATA = "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAttractions"
+TYCG_CONSUME_DATASET_ID = "8dc035f1-0770-4522-8c98-96d98bb0530e"
+TYCG_CONSUME_DATASET_PAGE = f"https://opendata.tycg.gov.tw/datalist/{TYCG_CONSUME_DATASET_ID}"
 TYCG_CONSUME_OPEN_DATA_CANDIDATES = (
+    # 舊版桃園觀光 OpenData 端點
     "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGConsume",
     "https://travel.tycg.gov.tw/zh-tw/OpenData/Consume",
+    # 新版桃園觀光 Swagger 的 base URL 是 /open-api；不同部署期格式可能不同，
+    # loader 會同時接受 XML / JSON / CSV，因此可安全逐一嘗試。
+    "https://travel.tycg.gov.tw/open-api/zh-tw/Consume",
+    "https://travel.tycg.gov.tw/open-api/zh-tw/Consume?format=xml",
+    "https://travel.tycg.gov.tw/open-api/zh-tw/Consume?format=json",
 )
+TYCG_CONSUME_LIST_URL = "https://travel.tycg.gov.tw/zh-tw/Consume/List"
+TYCG_SEARCH_URL = "https://travel.tycg.gov.tw/zh-tw/search"
 TYCG_ALBUM_OPEN_DATA_CANDIDATES = (
     "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAlbum",
     "https://travel.tycg.gov.tw/zh-tw/OpenData/Album",
@@ -251,6 +265,9 @@ _official_attractions_cache_at: float = 0.0
 _official_consume_cache: list[dict[str, Any]] = []
 _official_consume_cache_at: float = 0.0
 _public_search_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
+_official_consume_catalog_cache: list[dict[str, str]] = []
+_official_consume_catalog_cache_at: float = 0.0
+_last_public_search_error: str = ""
 _official_page_image_cache: dict[str, list[dict[str, str]]] = {}
 _official_album_cache: list[dict[str, Any]] = []
 _official_album_cache_at: float = 0.0
@@ -841,6 +858,29 @@ def _format_local_route_answer(records: list[dict[str, Any]], question: str) -> 
     return "\n".join(lines)
 
 
+def _focused_kb_mentions(question: str, hits: list[dict[str, Any]], limit: int = 4) -> list[str]:
+    """當 data.md 只有「內文提到」而非獨立主題時，只回傳含查詢詞的句子，避免整章灌回去。"""
+    clean = re.sub(r"[|｜].*$", "", question).strip()
+    qn = normalize_text(clean)
+    if not qn or len(qn) < 2:
+        return []
+    mentions: list[str] = []
+    seen: set[str] = set()
+    for hit in hits:
+        raw = clean_markdown_for_local(str(hit.get("text") or ""))
+        pieces = re.split(r"(?<=[。！？!?])\s*|\n+", raw)
+        for piece in pieces:
+            piece = piece.strip(" •-*\t")
+            if not piece or qn not in normalize_text(piece):
+                continue
+            if piece not in seen:
+                seen.add(piece)
+                mentions.append(piece)
+            if len(mentions) >= limit:
+                return mentions
+    return mentions
+
+
 def local_rag_answer(
     question: str,
     hits: list[dict[str, Any]],
@@ -942,6 +982,17 @@ def local_rag_answer(
             f"😅 這題目前 data.md、桃園官方資料與公開網路搜尋都還沒有取得足夠可靠內容來回答「{question}」。\n\n"
             "你可以換一個更完整的名稱，豆干弟會再從官方網站優先搜尋。"
         )
+
+    # data.md 只是在大章節內「提到」新名詞時，不要把整個大章節當成完整答案。
+    # 外部搜尋若暫時不可用，僅顯示與查詢詞直接相關的句子，並清楚說明資料深度有限。
+    if hits and not has_direct_kb_topic(question, hits) and not official_record and not public_results:
+        mentions = _focused_kb_mentions(question, hits)
+        if mentions:
+            return (
+                f"📌 **{re.sub(r'[|｜].*$', '', question).strip()}**\n\n"
+                + "\n".join(f"• {item}" for item in mentions)
+                + "\n\n目前 data.md 只有上述簡短提及；外部搜尋這一輪沒有取得可靠結果，所以豆干弟先不把同章節其他不相關內容塞進來。"
+            )
 
     if len(hits) == 1:
         hit = hits[0]
@@ -1066,83 +1117,205 @@ async def find_official_attraction(query: str, focus_entities: list[str] | None 
     return best[1] if best[0] >= 60 else None
 
 
-async def load_official_consumes() -> list[dict[str, Any]]:
-    """讀取桃園觀光導覽網「消費／美食」官方 Open Data。
+def _mapping_get(mapping: dict[str, Any], *names: str) -> str:
+    lowered = {str(k).lower(): v for k, v in mapping.items()}
+    for name in names:
+        value = lowered.get(name.lower())
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
 
-    這層專門補 data.md 沒有建立獨立章節的店家、食品與伴手禮，
-    例如「月光餅」。不依賴 OpenAI API 額度。
-    """
+
+def _consume_record_from_mapping(mapping: dict[str, Any]) -> dict[str, Any] | None:
+    name = _mapping_get(mapping, "Name", "name", "Title", "title")
+    if not name:
+        return None
+    record_id = _mapping_get(mapping, "InfoId", "InfoID", "Id", "ID", "id")
+    ty_website = _mapping_get(mapping, "TYWebsite", "tywebsite", "SourceUrl", "source_url")
+    source_url = ty_website or (
+        f"https://travel.tycg.gov.tw/zh-tw/Consume/Detail/{record_id}"
+        if record_id else TYCG_CONSUME_LIST_URL
+    )
+    pictures: list[dict[str, str]] = []
+    for i in range(1, 5):
+        image_url = _mapping_get(
+            mapping,
+            f"Picture{i}", f"PictureUrl{i}", f"PictureURL{i}",
+            f"Photo{i}", f"Image{i}",
+        )
+        if image_url:
+            pictures.append({
+                "image_url": image_url,
+                "thumbnail_url": image_url,
+                "source_url": source_url,
+                "caption": _mapping_get(mapping, f"Picdescribe{i}", f"PictureDescription{i}") or f"{name}｜桃園觀光導覽網官方照片",
+            })
+    return {
+        "id": record_id,
+        "entity_type": "consume",
+        "name": name,
+        "summary": _mapping_get(mapping, "Toldescribe", "Summary", "summary"),
+        "description": _mapping_get(mapping, "Description", "Description1", "description"),
+        "address": _mapping_get(mapping, "Add", "Address", "address"),
+        "open_time": _mapping_get(mapping, "Opentime", "OpenTime", "open_time"),
+        "tel": _mapping_get(mapping, "Tel", "Telephone", "Phone", "tel"),
+        "website": _mapping_get(mapping, "Website", "website"),
+        "ty_website": ty_website,
+        "px": _mapping_get(mapping, "Px", "Longitude", "longitude"),
+        "py": _mapping_get(mapping, "Py", "Latitude", "latitude"),
+        "pictures": pictures,
+        "source_url": source_url,
+    }
+
+
+def _extract_json_mappings(payload: Any) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        if any(str(k).lower() == "name" for k in payload):
+            found.append(payload)
+        for value in payload.values():
+            found.extend(_extract_json_mappings(value))
+    elif isinstance(payload, list):
+        for value in payload:
+            found.extend(_extract_json_mappings(value))
+    return found
+
+
+def _parse_consume_response(response: httpx.Response) -> list[dict[str, Any]]:
+    """接受桃園觀光不同時期可能回傳的 XML / JSON / CSV。"""
+    text = response.text.lstrip("\ufeff\r\n\t ")
+    content_type = (response.headers.get("content-type") or "").lower()
+    mappings: list[dict[str, Any]] = []
+
+    if "json" in content_type or text.startswith(("{", "[")):
+        try:
+            mappings = _extract_json_mappings(response.json())
+        except Exception:
+            try:
+                mappings = _extract_json_mappings(json.loads(text))
+            except Exception:
+                mappings = []
+    elif "csv" in content_type or ("," in text[:200] and "Name" in text[:500]):
+        try:
+            mappings = [dict(row) for row in csv.DictReader(io.StringIO(text))]
+        except Exception:
+            mappings = []
+    else:
+        try:
+            root = ET.fromstring(response.content)
+            for element in root.iter():
+                children = list(element)
+                if not children:
+                    continue
+                mapping = {child.tag.split("}")[-1]: (child.text or "").strip() for child in children}
+                if any(str(k).lower() == "name" for k in mapping):
+                    mappings.append(mapping)
+        except Exception:
+            mappings = []
+
+    records: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for mapping in mappings:
+        record = _consume_record_from_mapping(mapping)
+        if not record:
+            continue
+        key = (str(record.get("id") or ""), normalize_text(str(record.get("name") or "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        records.append(record)
+    return records
+
+
+def _extract_resource_urls(text: str, base_url: str) -> list[str]:
+    """從資料集 metadata / HTML 找真正的 resource download URL。"""
+    decoded = unescape((text or "").replace("\\/", "/"))
+    candidates = re.findall(
+        r'https?://[^\s"\'<>]+|(?:/[^\s"\'<>]+/(?:resource|resources)/[^\s"\'<>]+/(?:download|api)[^\s"\'<>]*)',
+        decoded,
+        flags=re.I,
+    )
+    urls: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        url = urljoin(base_url, raw.rstrip(').,;"\''))
+        host = urlparse(url).netloc.lower()
+        if "tycg.gov.tw" not in host:
+            continue
+        if not any(token in url.lower() for token in ("/download", "/resource/", ".xml", ".json", ".csv")):
+            continue
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls[:12]
+
+
+async def _discover_consume_resource_urls(client: httpx.AsyncClient) -> list[str]:
+    metadata_urls = [
+        TYCG_CONSUME_DATASET_PAGE,
+        f"https://opendata.tycg.gov.tw/api/dataset/{TYCG_CONSUME_DATASET_ID}",
+        f"https://opendata.tycg.gov.tw/api/v1/dataset/{TYCG_CONSUME_DATASET_ID}",
+    ]
+    found: list[str] = []
+    seen: set[str] = set()
+    for meta_url in metadata_urls:
+        try:
+            response = await client.get(meta_url)
+            if response.status_code >= 400:
+                continue
+            for url in _extract_resource_urls(response.text, str(response.url)):
+                if url not in seen:
+                    seen.add(url)
+                    found.append(url)
+        except Exception:
+            continue
+    return found
+
+
+async def load_official_consumes() -> list[dict[str, Any]]:
+    """讀取桃園官方消費／美食資料；不再依賴單一舊版 URL。"""
     global _official_consume_cache, _official_consume_cache_at, _last_official_error
     now = time.time()
     if _official_consume_cache and now - _official_consume_cache_at < OFFICIAL_CACHE_SECONDS:
         return _official_consume_cache
 
-    root: ET.Element | None = None
+    timeout = httpx.Timeout(14.0, connect=6.0)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/11.0)",
+        "Accept": "application/json, application/xml, text/xml, text/csv, text/plain, */*",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+    }
     errors: list[str] = []
-    timeout = httpx.Timeout(12.0, connect=6.0)
-    headers = {"User-Agent": "Mozilla/5.0 Daxi-AI-Guide/10.0"}
+    records: list[dict[str, Any]] = []
+
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-        for endpoint in TYCG_CONSUME_OPEN_DATA_CANDIDATES:
+        endpoints = list(TYCG_CONSUME_OPEN_DATA_CANDIDATES)
+        endpoints.extend(await _discover_consume_resource_urls(client))
+        for endpoint in dict.fromkeys(endpoints):
             try:
                 response = await client.get(endpoint)
                 response.raise_for_status()
-                root = ET.fromstring(response.content)
-                if root is not None:
+                parsed = _parse_consume_response(response)
+                if parsed:
+                    records.extend(parsed)
+                    print(f"🍴 桃園官方消費資料來源成功：{endpoint}｜{len(parsed)} 筆")
                     break
+                errors.append(f"{endpoint}: HTTP {response.status_code}, 可讀但沒有解析到 Name 欄位")
             except Exception as exc:
                 errors.append(f"{endpoint}: {type(exc).__name__}: {sanitize_error(exc)}")
 
-    if root is None:
-        if errors:
-            _last_official_error = " | ".join(errors[-2:])
-        return _official_consume_cache
-
-    records: list[dict[str, Any]] = []
-    for element in root.iter():
-        name = _xml_child_text(element, "Name")
-        if not name:
-            continue
-        record_id = _xml_child_text(element, "Id", "ID", "InfoId", "InfoID")
-        ty_website = _xml_child_text(element, "TYWebsite")
-        source_url = ty_website or (
-            f"https://travel.tycg.gov.tw/zh-tw/Consume/Detail/{record_id}" if record_id else "https://travel.tycg.gov.tw/zh-tw/consume/list"
-        )
-        pictures: list[dict[str, str]] = []
-        for i in range(1, 4):
-            image_url = _xml_child_text(element, f"Picture{i}", f"PictureUrl{i}", f"PictureURL{i}")
-            if image_url:
-                pictures.append({
-                    "image_url": image_url,
-                    "thumbnail_url": image_url,
-                    "source_url": source_url,
-                    "caption": _xml_child_text(element, f"Picdescribe{i}", f"PictureDescription{i}") or f"{name}｜桃園觀光導覽網官方照片",
-                })
-        records.append({
-            "id": record_id,
-            "entity_type": "consume",
-            "name": name,
-            "summary": _xml_child_text(element, "Toldescribe"),
-            "description": _xml_child_text(element, "Description", "Description1"),
-            "address": _xml_child_text(element, "Add", "Address"),
-            "open_time": _xml_child_text(element, "Opentime", "OpenTime"),
-            "tel": _xml_child_text(element, "Tel", "Telephone"),
-            "website": _xml_child_text(element, "Website"),
-            "ty_website": ty_website,
-            "px": _xml_child_text(element, "Px", "Longitude"),
-            "py": _xml_child_text(element, "Py", "Latitude"),
-            "pictures": pictures,
-            "source_url": source_url,
-        })
-
     unique: dict[tuple[str, str], dict[str, Any]] = {}
     for record in records:
-        key = (str(record.get("id") or ""), str(record.get("name") or ""))
+        key = (str(record.get("id") or ""), normalize_text(str(record.get("name") or "")))
         if key not in unique:
             unique[key] = record
     _official_consume_cache = list(unique.values())
     _official_consume_cache_at = now
     if _official_consume_cache:
-        print(f"🍴 桃園觀光官方消費 Open Data 載入：{len(_official_consume_cache)} 筆")
+        _last_official_error = ""
+        print(f"🍴 桃園觀光官方消費資料快取：{len(_official_consume_cache)} 筆")
+    elif errors:
+        _last_official_error = " | ".join(errors[-4:])
     return _official_consume_cache
 
 
@@ -1161,31 +1334,194 @@ def entity_query_variants(query: str, focus_entities: list[str] | None = None) -
     return list(dict.fromkeys(v for v in variants if v))
 
 
+def _extract_consume_detail_links(html: str, base_url: str) -> list[dict[str, str]]:
+    """從桃園觀光美食列表／搜尋頁抽取店家名稱與 Detail URL。"""
+    decoded = unescape((html or "").replace("\\/", "/"))
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    pattern = re.compile(
+        r'<a(?=[^>]*href=["\']([^"\']*/(?:zh-tw/)?consume/detail/\d+[^"\']*)["\'])[^>]*>(.*?)</a>',
+        re.I | re.S,
+    )
+    for match in pattern.finditer(decoded):
+        url = urljoin(base_url, match.group(1))
+        if url in seen:
+            continue
+        anchor_text = _strip_html_text(match.group(2)).strip()
+        # 有些卡片的 <a> 只有圖片，名稱在周邊容器；抓取前後文字補足。
+        if not anchor_text or len(anchor_text) < 2:
+            left = max(0, match.start() - 600)
+            right = min(len(decoded), match.end() + 600)
+            nearby = _strip_html_text(decoded[left:right])
+            title_candidates = re.findall(r"[\u4e00-\u9fffA-Za-z0-9（）()·・\-]{2,40}", nearby)
+            anchor_text = next((t.strip() for t in title_candidates if "桃園觀光" not in t), "")
+        seen.add(url)
+        results.append({"name": anchor_text, "url": url})
+    return results
+
+
+async def _load_official_consume_catalog() -> list[dict[str, str]]:
+    """當 Open Data 暫時失效時，直接掃桃園觀光官方美食列表建立名稱索引。"""
+    global _official_consume_catalog_cache, _official_consume_catalog_cache_at, _last_official_error
+    now = time.time()
+    if _official_consume_catalog_cache and now - _official_consume_catalog_cache_at < OFFICIAL_CACHE_SECONDS:
+        return _official_consume_catalog_cache
+
+    timeout = httpx.Timeout(12.0, connect=5.0)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/11.0)",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+    }
+    catalog: list[dict[str, str]] = []
+    errors: list[str] = []
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        try:
+            first = await client.get(TYCG_CONSUME_LIST_URL)
+            first.raise_for_status()
+            catalog.extend(_extract_consume_detail_links(first.text, str(first.url)))
+            page_numbers = [int(n) for n in re.findall(r'[?&]page=(\d+)', first.text, flags=re.I)]
+            max_page = min(max(page_numbers, default=18), 40)
+        except Exception as exc:
+            errors.append(f"list page 1: {type(exc).__name__}: {sanitize_error(exc)}")
+            max_page = 0
+
+        semaphore = asyncio.Semaphore(6)
+
+        async def fetch_page(page_no: int) -> list[dict[str, str]]:
+            async with semaphore:
+                try:
+                    response = await client.get(TYCG_CONSUME_LIST_URL, params={"page": page_no})
+                    if response.status_code >= 400:
+                        return []
+                    return _extract_consume_detail_links(response.text, str(response.url))
+                except Exception as exc:
+                    errors.append(f"list page {page_no}: {type(exc).__name__}: {sanitize_error(exc)}")
+                    return []
+
+        if max_page >= 2:
+            pages = await asyncio.gather(*(fetch_page(page) for page in range(2, max_page + 1)))
+            for page_items in pages:
+                catalog.extend(page_items)
+
+    unique: dict[str, dict[str, str]] = {}
+    for item in catalog:
+        url = item.get("url", "")
+        if url and url not in unique:
+            unique[url] = item
+    _official_consume_catalog_cache = list(unique.values())
+    _official_consume_catalog_cache_at = now
+    if _official_consume_catalog_cache:
+        print(f"🍴 桃園觀光美食 HTML 索引：{len(_official_consume_catalog_cache)} 筆")
+    elif errors:
+        _last_official_error = " | ".join(errors[-3:])
+    return _official_consume_catalog_cache
+
+
+def _extract_meta_content(html: str, key: str) -> str:
+    patterns = [
+        rf'<meta[^>]+(?:name|property)=["\']{re.escape(key)}["\'][^>]+content=["\']([^"\']+)',
+        rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\']{re.escape(key)}["\']',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.I | re.S)
+        if match:
+            return _strip_html_text(unescape(match.group(1))).strip()
+    return ""
+
+
+def _parse_consume_detail_html(url: str, html: str, fallback_name: str = "") -> dict[str, Any]:
+    text = _strip_html_text(html)
+    name = ""
+    for pattern in (r'<h1[^>]*>(.*?)</h1>', r'<h2[^>]*>(.*?)</h2>', r'<title[^>]*>(.*?)</title>'):
+        match = re.search(pattern, html, flags=re.I | re.S)
+        if match:
+            candidate = _strip_html_text(match.group(1)).split("|")[0].strip()
+            if candidate and "桃園觀光導覽網" not in candidate:
+                name = candidate
+                break
+    name = name or fallback_name or "桃園美食店家"
+    record_id_match = re.search(r'/consume/detail/(\d+)', url, flags=re.I)
+    record_id = record_id_match.group(1) if record_id_match else ""
+    description = _extract_meta_content(html, "description") or _extract_meta_content(html, "og:description")
+    if not description:
+        feature_match = re.search(r'特色介紹\s*(.{20,500}?)(?:小叮嚀|交通資訊|周遭停車場|服務設施|周邊好遊|$)', text, flags=re.S)
+        description = feature_match.group(1).strip() if feature_match else ""
+    tel_match = re.search(r'電話\s*[:：/]?\s*([0-9()\-\s]{7,24})', text)
+    address_match = re.search(r'地址\s*[:：/]?\s*(桃園市[^\n]{3,80}?)(?:營業時間|開放時間|相關連結|星期|電話|$)', text)
+    open_match = re.search(r'營業時間\s*(.{3,500}?)(?:相關連結|特色介紹|交通資訊|周遭停車場|服務設施|$)', text, flags=re.S)
+    return {
+        "id": record_id,
+        "entity_type": "consume",
+        "name": name,
+        "summary": description,
+        "description": description,
+        "address": address_match.group(1).strip() if address_match else "",
+        "open_time": open_match.group(1).strip()[:500] if open_match else "",
+        "tel": re.sub(r"\s+", "", tel_match.group(1)).strip() if tel_match else "",
+        "website": "",
+        "ty_website": url,
+        "px": "",
+        "py": "",
+        "pictures": [],
+        "source_url": url,
+    }
+
+
+async def _find_consume_from_official_catalog(query: str, focus_entities: list[str] | None = None) -> dict[str, Any] | None:
+    catalog = await _load_official_consume_catalog()
+    if not catalog:
+        return None
+    variants = entity_query_variants(query, focus_entities)
+    best_score = 0.0
+    best_item: dict[str, str] | None = None
+    for item in catalog:
+        name = item.get("name", "")
+        if not name:
+            continue
+        score = max((attraction_match_score(v, name) for v in variants if v), default=0.0)
+        nn = normalize_text(name)
+        for variant in variants:
+            vn = normalize_text(variant)
+            if vn and len(vn) >= 2 and vn in nn:
+                score = max(score, 82.0)
+        if score > best_score:
+            best_score, best_item = score, item
+    if not best_item or best_score < 60:
+        return None
+
+    timeout = httpx.Timeout(12.0, connect=5.0)
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/11.0)", "Accept-Language": "zh-TW,zh;q=0.9"}
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+            response = await client.get(best_item["url"])
+            response.raise_for_status()
+            return _parse_consume_detail_html(str(response.url), response.text, best_item.get("name", ""))
+    except Exception:
+        return _parse_consume_detail_html(best_item["url"], "", best_item.get("name", ""))
+
+
 async def find_official_consume(query: str, focus_entities: list[str] | None = None) -> dict[str, Any] | None:
     records = await load_official_consumes()
-    if not records:
-        return None
     candidate_queries = entity_query_variants(query, focus_entities)
     best: tuple[float, dict[str, Any] | None] = (0.0, None)
     for record in records:
         name = str(record.get("name", ""))
         score = max((attraction_match_score(candidate, name) for candidate in candidate_queries if candidate), default=0.0)
-        # 消費資料名稱常是「陳媽媽月光餅」，查「月光餅」也應視為高可信直接命中。
         nn = normalize_text(name)
         for candidate in candidate_queries:
             qn = normalize_text(candidate)
             if qn and len(qn) >= 2 and qn in nn:
-                score = max(score, 78.0)
+                score = max(score, 82.0)
         if score > best[0]:
             best = (score, record)
-    return best[1] if best[0] >= 60 else None
+    if best[0] >= 60 and best[1]:
+        return best[1]
+
+    # Open Data 端點變動／暫時失效時，仍從官方「美食快搜」HTML 索引找實體。
+    return await _find_consume_from_official_catalog(query, focus_entities)
 
 
 async def find_official_entity(query: str, focus_entities: list[str] | None = None) -> dict[str, Any] | None:
-    """景點與美食／店家都當成可延續的官方實體。
-
-    優先沿用 focus entity；若 data.md 沒有該名詞，仍可由桃園官方資料命中。
-    """
     attraction = await find_official_attraction(query, focus_entities)
     consume = await find_official_consume(query, focus_entities)
     if attraction and consume:
@@ -1194,7 +1530,6 @@ async def find_official_entity(query: str, focus_entities: list[str] | None = No
         c_score = max(attraction_match_score(c, str(consume.get("name") or "")) for c in candidates if c)
         return consume if c_score > a_score else attraction
     return attraction or consume
-
 
 def _strip_html_text(raw_html: str) -> str:
     text = re.sub(r"(?is)<(script|style|noscript).*?>.*?</\1>", " ", raw_html)
@@ -1215,18 +1550,174 @@ def _decode_ddg_result_url(url: str) -> str:
     return full
 
 
-async def public_web_search(query: str, limit: int = 5) -> list[dict[str, str]]:
-    """OpenAI 額度不足時的公開網路搜尋備援。
+def _is_allowed_public_result(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = parsed.netloc.lower().replace("www.", "")
+    blocked = (
+        "bing.com", "duckduckgo.com", "google.com", "googleusercontent.com",
+        "microsoft.com", "msn.com", "yahoo.com",
+    )
+    return bool(host and not any(host == b or host.endswith("." + b) for b in blocked))
 
-    先以桃園市政府、桃園觀光與交通部觀光署官方網域搜尋；官方找不到時
-    才做一般網路搜尋。結果只使用搜尋結果標題／摘要與原始網址，不假裝是 data.md。
+
+def _query_term_match(text: str, query: str) -> bool:
+    q = normalize_text(re.sub(r"[|｜].*$", "", query))
+    t = normalize_text(text)
+    if not q or not t:
+        return False
+    if q in t or t in q:
+        return True
+    # 中文短詞（2 字以上）要求至少有主要 bigram 重疊，避免抓到純導航連結。
+    q_tokens = {tok for tok in tokenize(query) if len(tok) >= 2}
+    t_tokens = set(tokenize(text))
+    return bool(q_tokens and len(q_tokens & t_tokens) >= max(1, min(2, len(q_tokens))))
+
+
+def _extract_official_search_links(html: str, base_url: str, query: str) -> list[dict[str, str]]:
+    decoded = unescape((html or "").replace("\\/", "/"))
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for match in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', decoded, flags=re.I | re.S):
+        url = urljoin(base_url, match.group(1))
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        if host != "travel.tycg.gov.tw":
+            continue
+        if not re.search(r'/(?:zh-tw/)?(?:consume/detail|travel/attraction|event/|multimedia/|tour/)', url, flags=re.I):
+            continue
+        title = _strip_html_text(match.group(2)).strip()
+        nearby = _strip_html_text(decoded[max(0, match.start()-260):min(len(decoded), match.end()+420)])
+        combined = f"{title} {nearby}"
+        if not _query_term_match(combined, query):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        results.append({
+            "type": "web",
+            "title": title or re.sub(r"[-_/]+", " ", urlparse(url).path).strip(),
+            "url": url,
+            "domain": "travel.tycg.gov.tw",
+            "snippet": nearby[:240],
+        })
+    return results
+
+
+async def _official_fulltext_search(client: httpx.AsyncClient, query: str, limit: int = 5) -> list[dict[str, str]]:
+    """直接利用桃園觀光站內全文檢索。不同版本前端的參數名稱可能不同，故逐一嘗試。"""
+    clean = re.sub(r"[|｜].*$", "", query).strip()
+    if not clean:
+        return []
+    param_candidates = (
+        {"keyword": clean},
+        {"q": clean},
+        {"query": clean},
+        {"search": clean},
+        {"searchText": clean},
+        {"Keyword": clean},
+    )
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for params in param_candidates:
+        try:
+            response = await client.get(TYCG_SEARCH_URL, params=params)
+            if response.status_code >= 400:
+                continue
+            parsed = _extract_official_search_links(response.text, str(response.url), clean)
+            for item in parsed:
+                if item["url"] not in seen:
+                    seen.add(item["url"])
+                    results.append(item)
+                    if len(results) >= limit:
+                        return results
+        except Exception:
+            continue
+    return results[:limit]
+
+
+def _extract_bing_results(html: str, limit: int = 5) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    # Bing 一般搜尋結果通常包在 li.b_algo；HTML 結構變動時再退回 h2>a。
+    blocks = re.findall(r'(?is)<li[^>]+class=["\'][^"\']*b_algo[^"\']*["\'][^>]*>(.*?)</li>', html)
+    if not blocks:
+        blocks = re.findall(r'(?is)<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>\s*</h2>', html)
+        for href, title_html in blocks:
+            if not _is_allowed_public_result(href) or href in seen:
+                continue
+            seen.add(href)
+            host = urlparse(href).netloc.lower().replace("www.", "")
+            results.append({"type":"web","title":_strip_html_text(title_html) or host,"url":href,"domain":host,"snippet":""})
+            if len(results) >= limit:
+                break
+        return results
+
+    for block in blocks:
+        link = re.search(r'(?is)<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', block)
+        if not link:
+            continue
+        url = unescape(link.group(1))
+        if not _is_allowed_public_result(url) or url in seen:
+            continue
+        snippet_match = re.search(r'(?is)<p[^>]*>(.*?)</p>', block)
+        snippet = _strip_html_text(snippet_match.group(1)) if snippet_match else ""
+        seen.add(url)
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        results.append({
+            "type": "web",
+            "title": _strip_html_text(link.group(2)) or host,
+            "url": url,
+            "domain": host,
+            "snippet": snippet,
+        })
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _extract_ddg_results(html: str, limit: int = 5) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    # 不再依賴巢狀 div 結構，只找 result__a，降低 DuckDuckGo HTML 小改版造成全空的機率。
+    links = re.findall(r'(?is)<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html)
+    for href, title_html in links:
+        url = _decode_ddg_result_url(href)
+        if not _is_allowed_public_result(url) or url in seen:
+            continue
+        seen.add(url)
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        results.append({
+            "type": "web",
+            "title": _strip_html_text(title_html) or host,
+            "url": url,
+            "domain": host,
+            "snippet": "",
+        })
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def public_web_search(query: str, limit: int = 5) -> list[dict[str, str]]:
+    """無需 OpenAI 額度的外部搜尋備援。
+
+    順序：桃園觀光站內搜尋 → Bing HTML → DuckDuckGo HTML。
+    搜尋結果仍會把政府／官方網域排在前面；任何 provider 失敗都不影響其他 provider。
     """
+    global _last_public_search_error
     key = normalize_text(query)
     cached = _public_search_cache.get(key)
     if cached and time.time() - cached[0] < OFFICIAL_CACHE_SECONDS:
         return cached[1][:limit]
 
     clean_query = re.sub(r"[|｜].*$", "", query).strip()
+    if not clean_query:
+        return []
+
     search_queries = [
         f'site:travel.tycg.gov.tw 大溪 "{clean_query}"',
         f'site:tycg.gov.tw 大溪 "{clean_query}"',
@@ -1235,72 +1726,62 @@ async def public_web_search(query: str, limit: int = 5) -> list[dict[str, str]]:
     ]
     results: list[dict[str, str]] = []
     seen: set[str] = set()
-    timeout = httpx.Timeout(10.0, connect=5.0)
+    errors: list[str] = []
+    timeout = httpx.Timeout(11.0, connect=5.0)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
         "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.7",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-            for search_query in search_queries:
-                if len(results) >= limit:
-                    break
-                try:
-                    response = await client.get("https://html.duckduckgo.com/html/", params={"q": search_query})
-                    response.raise_for_status()
-                    html = response.text
-                except Exception:
-                    continue
+    def add(items: list[dict[str, str]]) -> None:
+        for item in items:
+            url = item.get("url", "")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            results.append(item)
+            if len(results) >= limit:
+                break
 
-                # DuckDuckGo HTML 版：每個 result 區塊包含 result__a / result__snippet。
-                blocks = re.findall(r'(?is)<div[^>]+class="[^"]*result[^"]*"[^>]*>(.*?)</div>\s*</div>', html)
-                if not blocks:
-                    blocks = re.findall(r'(?is)<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html)
-                    for href, title_html in blocks:
-                        url = _decode_ddg_result_url(href)
-                        if not url or url in seen:
-                            continue
-                        seen.add(url)
-                        host = urlparse(url).netloc.replace("www.", "")
-                        results.append({"type": "web", "title": _strip_html_text(title_html), "url": url, "domain": host, "snippet": ""})
-                        if len(results) >= limit:
-                            break
-                    continue
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        try:
+            add(await _official_fulltext_search(client, clean_query, limit=limit))
+        except Exception as exc:
+            errors.append(f"official-search: {type(exc).__name__}: {sanitize_error(exc)}")
 
-                for block in blocks:
-                    link_match = re.search(r'(?is)<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block)
-                    if not link_match:
-                        continue
-                    url = _decode_ddg_result_url(link_match.group(1))
-                    if not url or url in seen or not url.startswith(("http://", "https://")):
-                        continue
-                    snippet_match = re.search(r'(?is)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>|<div[^>]+class="result__snippet"[^>]*>(.*?)</div>', block)
-                    snippet_html = (snippet_match.group(1) or snippet_match.group(2)) if snippet_match else ""
-                    seen.add(url)
-                    host = urlparse(url).netloc.replace("www.", "")
-                    results.append({
-                        "type": "web",
-                        "title": _strip_html_text(link_match.group(2)) or host,
-                        "url": url,
-                        "domain": host,
-                        "snippet": _strip_html_text(snippet_html),
-                    })
-                    if len(results) >= limit:
-                        break
-    except Exception:
-        pass
+        for search_query in search_queries:
+            if len(results) >= limit:
+                break
+            # Bing fallback
+            try:
+                response = await client.get("https://www.bing.com/search", params={"q": search_query, "setlang": "zh-hant"})
+                if response.status_code < 400:
+                    add(_extract_bing_results(response.text, limit=limit-len(results)))
+            except Exception as exc:
+                errors.append(f"bing: {type(exc).__name__}: {sanitize_error(exc)}")
 
-    # 官方來源永遠排前面；其次才是一般網路結果。
+            if len(results) >= limit:
+                break
+            # DuckDuckGo fallback
+            try:
+                response = await client.get("https://html.duckduckgo.com/html/", params={"q": search_query})
+                if response.status_code < 400:
+                    add(_extract_ddg_results(response.text, limit=limit-len(results)))
+            except Exception as exc:
+                errors.append(f"ddg: {type(exc).__name__}: {sanitize_error(exc)}")
+
     def official_rank(item: dict[str, str]) -> tuple[int, int]:
         host = item.get("domain", "").lower()
         official = any(host == d or host.endswith("." + d) for d in OFFICIAL_WEB_DOMAINS)
-        return (0 if official else 1, 0)
+        # 桃園觀光本身最高，其他官方其次，一般網路最後。
+        if host == "travel.tycg.gov.tw":
+            return (0, 0)
+        return (1 if official else 2, 0)
 
     results.sort(key=official_rank)
+    _last_public_search_error = " | ".join(errors[-5:]) if not results and errors else ""
     _public_search_cache[key] = (time.time(), results[:limit])
     return results[:limit]
-
 
 def build_public_search_context(results: list[dict[str, str]]) -> str:
     if not results:
@@ -2169,7 +2650,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="10.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="11.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -2254,7 +2735,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "10.0.0",
+        "app_version": "11.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -2265,8 +2746,10 @@ def diagnostics() -> dict[str, Any]:
         "last_image_error": _last_image_error or None,
         "official_attractions_cached": len(_official_attractions_cache),
         "official_consumes_cached": len(_official_consume_cache),
+        "official_consume_catalog_cached": len(_official_consume_catalog_cache),
         "official_albums_cached": len(_official_album_cache),
         "public_search_cache_entries": len(_public_search_cache),
+        "last_public_search_error": _last_public_search_error or None,
         "trusted_images_cached": len(_trusted_image_urls),
         "openai_quota_blocked": time.time() < _openai_quota_blocked_until,
         "server_conversations_cached": len(_conversation_states),
@@ -2285,7 +2768,7 @@ async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) ->
     record = await find_official_entity(name, [name])
     public_results = [] if record else await public_web_search(name, limit=5)
     return {
-        "app_version": "10.0.0",
+        "app_version": "11.0.0",
         "query": name,
         "direct_kb_topic": has_direct_kb_topic(name, hits),
         "kb_titles": [hit.get("title") for hit in hits],
@@ -2294,7 +2777,11 @@ async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) ->
             "entity_type": record.get("entity_type") or "attraction",
             "source_url": record.get("source_url"),
         } if record else None,
+        "official_consumes_cached": len(_official_consume_cache),
+        "official_consume_catalog_cached": len(_official_consume_catalog_cache),
         "public_results": public_results,
+        "last_official_error": _last_official_error or None,
+        "last_public_search_error": _last_public_search_error or None,
     }
 
 
@@ -2314,7 +2801,7 @@ async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) ->
             matched_gallery = gallery_url
             break
     return {
-        "app_version": "10.0.0",
+        "app_version": "11.0.0",
         "query": name,
         "official_record": {
             "name": record.get("name"),
@@ -2551,7 +3038,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "10.0.0",
+            "app_version": "11.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),

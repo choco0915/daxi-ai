@@ -311,6 +311,42 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(focus, ["陳媽媽月光餅"])
         self.assertIn("陳媽媽月光餅", resolved)
 
+    def test_consume_list_html_parser(self) -> None:
+        html = """
+        <div class='card'><a href='/zh-tw/consume/detail/1947'><h3>陳媽媽月光餅</h3></a></div>
+        <div class='card'><a href='/zh-tw/consume/detail/1934'>永安61庭園咖啡</a></div>
+        """
+        items = app._extract_consume_detail_links(html, "https://travel.tycg.gov.tw/zh-tw/Consume/List")
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["name"], "陳媽媽月光餅")
+        self.assertIn("/consume/detail/1947", items[0]["url"].lower())
+
+    def test_consume_detail_html_parser(self) -> None:
+        html = """
+        <html><head><title>陳媽媽月光餅 | 桃園觀光導覽網</title>
+        <meta name='description' content='陳媽媽手工月光餅外表樸實，QQ外皮是大溪特色。'></head>
+        <body><h2>陳媽媽月光餅</h2>電話 03-3882451 地址 桃園市大溪區和平路87號 營業時間 星期三：09:00 - 18:00 特色介紹 月光餅</body></html>
+        """
+        record = app._parse_consume_detail_html("https://travel.tycg.gov.tw/zh-tw/consume/detail/1947", html)
+        self.assertEqual(record["name"], "陳媽媽月光餅")
+        self.assertIn("和平路87號", record["address"])
+        self.assertEqual(record["tel"], "03-3882451")
+        self.assertIn("大溪特色", record["description"])
+
+    def test_bing_result_parser(self) -> None:
+        html = """<ol><li class='b_algo'><h2><a href='https://travel.tycg.gov.tw/zh-tw/Consume/Detail/1947'>陳媽媽月光餅</a></h2><div><p>桃園大溪月光餅官方介紹</p></div></li></ol>"""
+        results = app._extract_bing_results(html)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["domain"], "travel.tycg.gov.tw")
+        self.assertIn("月光餅", results[0]["title"])
+
+    def test_unknown_term_does_not_dump_broad_kb_when_external_search_fails(self) -> None:
+        hits = app.retrieve("月光餅")
+        answer = app.local_rag_answer("月光餅", hits, None, public_results=[])
+        self.assertIn("月光餅", answer)
+        self.assertNotIn("木藝類", answer)
+
+
 
 
 if __name__ == "__main__":
