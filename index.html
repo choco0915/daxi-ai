@@ -1165,9 +1165,17 @@
                 row.className = "source-row";
 
                 (Array.isArray(sources) ? sources : []).forEach((source) => {
-                    const chip = document.createElement("span");
+                    const isWeb = source && typeof source === "object" && source.type === "web" && source.url;
+                    const chip = document.createElement(isWeb ? "a" : "span");
                     chip.className = "source-chip";
-                    if (source && typeof source === "object") {
+
+                    if (isWeb) {
+                        chip.href = source.url;
+                        chip.target = "_blank";
+                        chip.rel = "noopener noreferrer";
+                        chip.textContent = `🌐 ${source.title || source.domain || "官方網站"}`;
+                        chip.title = source.url;
+                    } else if (source && typeof source === "object") {
                         chip.textContent = `📚 ${source.category || "data.md"}｜${source.title || "來源"}`;
                     } else {
                         chip.textContent = `📚 data.md｜${String(source)}`;
@@ -1178,7 +1186,13 @@
                 if (mode) {
                     const modeChip = document.createElement("span");
                     modeChip.className = "mode-chip";
-                    modeChip.textContent = mode === "openai-rag" ? "🤖 AI RAG" : "🧩 本地 RAG";
+                    if (mode === "openai-web-rag") {
+                        modeChip.textContent = "🌐 官方網路 + AI RAG";
+                    } else if (mode === "openai-rag") {
+                        modeChip.textContent = "🤖 AI RAG";
+                    } else {
+                        modeChip.textContent = "🧩 本地 RAG";
+                    }
                     row.appendChild(modeChip);
                 }
 
@@ -1200,18 +1214,31 @@
         }
 
         function appendMessage(sender, text, options = {}) {
-            const { sources = [], mode = "", storymapUrl = STORYMAP_URL, save = true } = options;
+            const {
+                sources = [],
+                mode = "",
+                storymapUrl = STORYMAP_URL,
+                recommendations = [],
+                save = true
+            } = options;
             const { message } = createMessageElement(sender, text, sources, mode, storymapUrl);
             chatMessages.appendChild(message);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
             if (save && currentChatId) {
-                chats[currentChatId].messages.push({ sender, text, sources, mode, storymapUrl });
+                chats[currentChatId].messages.push({ sender, text, sources, mode, storymapUrl, recommendations });
                 saveChats();
             }
         }
 
-        async function appendBotMessage(text, sources = [], mode = "", storymapUrl = STORYMAP_URL, save = true) {
+        async function appendBotMessage(
+            text,
+            sources = [],
+            mode = "",
+            storymapUrl = STORYMAP_URL,
+            recommendations = [],
+            save = true
+        ) {
             const { message, content } = createMessageElement("bot", "", sources, mode, storymapUrl);
             chatMessages.appendChild(message);
             const shouldAnimate = String(text || "").length <= 900;
@@ -1232,7 +1259,14 @@
 
             chatMessages.scrollTop = chatMessages.scrollHeight;
             if (save && currentChatId) {
-                chats[currentChatId].messages.push({ sender: "bot", text, sources, mode, storymapUrl });
+                chats[currentChatId].messages.push({
+                    sender: "bot",
+                    text,
+                    sources,
+                    mode,
+                    storymapUrl,
+                    recommendations: Array.isArray(recommendations) ? recommendations : []
+                });
                 saveChats();
             }
         }
@@ -1248,6 +1282,7 @@
                     sources: Array.isArray(item.sources) ? item.sources : [],
                     mode: item.mode || "",
                     storymapUrl: item.storymapUrl || STORYMAP_URL,
+                    recommendations: Array.isArray(item.recommendations) ? item.recommendations : [],
                     save: false
                 });
             });
@@ -1364,13 +1399,41 @@
             updateSidebar();
         }
 
+        function sourceTitlesForBackend(sources) {
+            if (!Array.isArray(sources)) return [];
+            return sources
+                .filter((source) => !(source && typeof source === "object" && source.type === "web"))
+                .map((source) => {
+                    if (source && typeof source === "object") return String(source.title || "").trim();
+                    return String(source || "").trim();
+                })
+                .filter(Boolean)
+                .slice(0, 6);
+        }
+
         function getHistoryForBackend() {
             if (!currentChatId || !chats[currentChatId]) return [];
             const messages = chats[currentChatId].messages || [];
-            return messages.slice(-8).map((item) => ({
+            return messages.slice(-10).map((item) => ({
                 role: item.sender === "bot" ? "assistant" : "user",
-                text: String(item.text || "").slice(0, 1500)
+                text: String(item.text || "").slice(0, 2500),
+                sources: sourceTitlesForBackend(item.sources),
+                recommendations: Array.isArray(item.recommendations)
+                    ? item.recommendations.map(String).slice(0, 6)
+                    : []
             }));
+        }
+
+        function getLastRecommendations() {
+            if (!currentChatId || !chats[currentChatId]) return [];
+            const messages = chats[currentChatId].messages || [];
+            for (let i = messages.length - 1; i >= 0; i -= 1) {
+                const item = messages[i];
+                if (item.sender === "bot" && Array.isArray(item.recommendations) && item.recommendations.length) {
+                    return item.recommendations.map(String).slice(0, 6);
+                }
+            }
+            return [];
         }
 
         async function askQuestion(question) {
@@ -1383,6 +1446,7 @@
             }
 
             const historyForBackend = getHistoryForBackend();
+            const lastRecommendations = getLastRecommendations();
             clearWelcome();
             recContainer.replaceChildren();
             appendMessage("user", cleanQuestion);
@@ -1396,7 +1460,8 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         question: cleanQuestion,
-                        history: historyForBackend
+                        history: historyForBackend,
+                        last_recommendations: lastRecommendations
                     })
                 });
 
@@ -1411,14 +1476,23 @@
                     throw new Error(typeof data.detail === "string" ? data.detail : "請求失敗");
                 }
 
-                setBusy(false, data.mode === "openai-rag" ? "✨ 豆干弟導覽完成" : "📚 已改用本地 RAG 回答");
+                if (data.mode === "openai-web-rag") {
+                    setBusy(false, "🌐 豆干弟已參考官方網路資料");
+                } else if (data.mode === "openai-rag") {
+                    setBusy(false, "✨ 豆干弟導覽完成");
+                } else {
+                    setBusy(false, "📚 已改用本地 RAG 回答");
+                }
+
+                const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
                 await appendBotMessage(
                     data.answer || "目前沒有取得回答。",
                     Array.isArray(data.sources) ? data.sources : [],
                     data.mode || "",
-                    data.storymap_url || STORYMAP_URL
+                    data.storymap_url || STORYMAP_URL,
+                    recommendations
                 );
-                renderRecButtons(data.recommendations || []);
+                renderRecButtons(recommendations);
                 window.setTimeout(() => {
                     if (!isSending) statusText.textContent = "豆干弟隨時待命";
                 }, 1800);

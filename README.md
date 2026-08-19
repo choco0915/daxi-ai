@@ -1,92 +1,138 @@
-# 光影大溪－豆干弟 AI 智慧導覽（正式作品展示版）
+# 光影大溪－豆干弟 AI 智慧導覽
 
-這是一套以 `data.md` 為主要知識來源的 FastAPI + OpenAI RAG 大溪智慧導覽網站，並針對公開展示加入豆干弟角色、動態光影背景、景點卡片、地圖導航、ArcGIS StoryMap 連結、回答來源標示、手機版介面與多輪對話記憶。
+這是一套以 `data.md` 為主要知識來源、搭配 OpenAI Responses API 與官方網站 `web_search` 的大溪智慧導覽系統。
 
-## 主要功能
+## 主要能力
 
-- `data.md` Hybrid RAG：中文 2～4 字 n-gram TF-IDF、標題加權、口語查詢擴充。
-- 豆干弟導覽角色：回答直接進入內容，不使用「我在 data.md 找到資料」等機械式前言。
-- 多輪對話脈絡：前端會把最近數輪對話帶回後端，讓「那它呢？」「再幫我排一下」等追問更自然。
-- 回答來源標示：顯示本次命中的 `data.md` 分類與章節。
-- ArcGIS StoryMap：整合 `數位風華的光影刻痕`，並嘗試從 StoryMap 公開 item data 自動辨識「豆干弟」圖片作為頭像；若無法解析則使用本地備援頭像。
-- 動態光影背景：保留原始 blob 光影概念，增加紫、粉、藍、青、橙、黃、綠等色彩層次。
-- 景點卡片、Google Maps 導航與推薦行程卡片。
-- 響應式手機版 UI。
-- 公開網站基本保護：GZip、安全標頭、每 IP 聊天頻率限制。
+- `data.md` Hybrid RAG：中文 2～4 字 n-gram TF-IDF、標題／意圖加權、主題焦點過濾。
+- 防止「前面答對、後面岔題」：單一主題只保留高相關章節；例如問「大溪木藝」不會再把「武德殿」當獨立主題一起展開。
+- 多輪對話記憶：支援「剛剛第二個」「深入介紹它」「把剛剛推薦的幾個景點排成半日行程」。
+- 官方網路補充：需要最新、深入、營業／開放、活動或行程資訊時，可使用 OpenAI `web_search`。
+- 官方來源優先：預設限制在桃園市政府體系、交通部觀光署與指定 ArcGIS StoryMap。
+- 回答來源標示：`data.md` 來源與網路來源分開呈現；網路來源可直接點開。
+- 豆干弟角色、指定人物頭像、動態光影背景、景點卡片與 RWD 手機版。
+- 公開部署：支援 Render。
 
-## 本地執行
+## 1. 建立環境
 
-### Windows Git Bash
+Windows Git Bash：
 
 ```bash
 python -m venv .venv
 source .venv/Scripts/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
+```
+
+macOS / Linux：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+## 2. 設定環境變數
+
+把 `.env.example` 複製成 `.env`：
+
+```env
+OPENAI_API_KEY=your_new_openai_api_key_here
+OPENAI_MODEL=gpt-5.6-luna
+WEB_SEARCH_ENABLED=true
+CHAT_RATE_LIMIT=30
+CHAT_RATE_WINDOW_SECONDS=60
+```
+
+`OPENAI_API_KEY` 只放在本機 `.env` 或 Render Environment Variables，不要上傳到 GitHub。
+
+## 3. 啟動
+
+```bash
 uvicorn app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-瀏覽器開啟：
+瀏覽器：
 
 ```text
 http://127.0.0.1:8000/
 ```
 
-## OpenAI 環境變數
-
-`.env`：
-
-```env
-OPENAI_API_KEY=你的新_API_Key
-OPENAI_MODEL=gpt-5.6-luna
-CHAT_RATE_LIMIT=30
-CHAT_RATE_WINDOW_SECONDS=60
-```
-
-不要把 `.env` 或真正的 API Key 上傳 GitHub。
-
-## Render 公開部署
-
-專案根目錄已包含 `render.yaml`，GitHub 更新後 Render 可自動重新部署。
-
-主要設定：
+健康檢查：
 
 ```text
-Build Command: pip install -r requirements.txt
-Start Command: uvicorn app:app --host 0.0.0.0 --port $PORT
-Health Check: /health
+http://127.0.0.1:8000/health
 ```
 
-Render 的 Environment 中需要設定：
+## 4. 對話脈絡怎麼運作
+
+前端會把最近 10 輪對話一起送到 `/chat`，並保留上一輪：
+
+- 回答所使用的 `data.md` 章節
+- 豆干弟推薦的景點
+
+因此可以接著問：
+
+```text
+深入介紹第二個
+剛剛第三個景點有什麼特色？
+把剛剛推薦的幾個景點排成半日行程
+它附近還能安排什麼？
+```
+
+後端會先把這類代名詞／序號解析成具體景點，再做 RAG，避免把前文所有景點一起塞進回答。
+
+## 5. 官方網路搜尋
+
+系統不是每一題都上網，避免不必要的延遲與 API 成本。以下情況會優先啟用官方網路補充：
+
+- 使用者明確說要查網路／官網
+- 問最新、目前、營業、開放、休館、票價、活動、交通等可能變動資訊
+- 要求「深入／詳細／更多」
+- 要安排行程或路線
+- `data.md` RAG 信心不足
+
+預設官方網域：
+
+```text
+tycg.gov.tw        桃園市政府與子網域
+ taiwan.net.tw       交通部觀光署
+ storymaps.arcgis.com 指定故事地圖
+```
+
+> `tycg.gov.tw` 的子網域包含桃園觀光導覽網、大溪木藝生態博物館、大溪大禧等官方服務。
+
+如不想使用 web search，可設定：
+
+```env
+WEB_SEARCH_ENABLED=false
+```
+
+## 6. RAG 測試
+
+不需要 OpenAI API Key：
+
+```bash
+python test_rag.py
+```
+
+目前測試包含：巴洛克、美食、六二四、停車、鳳飛飛、雨天、半日遊、未知問題、木藝防岔題、第二個景點延續、前文推薦行程等。
+
+## 7. Render 部署
+
+專案根目錄保留 `render.yaml`，Push 到 GitHub 後 Render 可自動重新部署。
+
+確認 Environment Variables 至少有：
 
 ```text
 OPENAI_API_KEY
 OPENAI_MODEL
+WEB_SEARCH_ENABLED
 CHAT_RATE_LIMIT
 CHAT_RATE_WINDOW_SECONDS
 ```
 
-## 豆干弟 StoryMap 頭像
-
-前端會嘗試讀取：
+Render 啟動指令：
 
 ```text
-https://www.arcgis.com/sharing/rest/content/items/b704c98b362041c1be364ad2c8ca3d27/data?f=json
-```
-
-並在公開 StoryMap 的圖片節點/資源中尋找含「豆干弟」相關標示的圖片。成功時網站上的主角頭像與 AI 對話頭像會自動換成 StoryMap 圖片。
-
-若 StoryMap 後續更換圖片 metadata、資源結構或限制跨網域讀取，網站會自動退回：
-
-```text
-static/dougan-di-fallback.svg
-```
-
-若希望 100% 固定使用某一張 StoryMap 豆干弟原圖，也可以把原圖另存成專案內的 `static/dougan-di.png`，再將 `index.html` 的 fallback 路徑改成該檔案。
-
-## 測試
-
-```bash
-python test_rag.py
-python check_public_ready.py
+uvicorn app:app --host 0.0.0.0 --port $PORT
 ```

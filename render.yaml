@@ -17,3 +17,5 @@ services:
         value: "30"
       - key: CHAT_RATE_WINDOW_SECONDS
         value: "60"
+      - key: WEB_SEARCH_ENABLED
+        value: "true"
