@@ -4,16 +4,17 @@ import re
 import time
 import unicodedata
 import xml.etree.ElementTree as ET
+from html import unescape
 from collections import Counter, defaultdict, deque
 from contextlib import asynccontextmanager
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
@@ -31,13 +32,17 @@ INDEX_HTML = os.path.join(APP_DIR, "index.html")
 
 load_dotenv(os.path.join(APP_DIR, ".env"))
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6")
 WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 TOP_K = 6
 MIN_RETRIEVAL_SCORE = 0.08
 MAX_HISTORY_TURNS = 10
 STORYMAP_URL = "https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27"
 TYCG_ATTRACTIONS_OPEN_DATA = "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAttractions"
+TYCG_ALBUM_OPEN_DATA_CANDIDATES = (
+    "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAlbum",
+    "https://travel.tycg.gov.tw/zh-tw/OpenData/Album",
+)
 OFFICIAL_CACHE_SECONDS = 1800
 
 # 官方來源優先。OpenAI web_search 的 allowed_domains 會包含該網域的子網域。
@@ -153,6 +158,7 @@ FOLLOWUP_MARKERS = (
     "剛剛", "剛才", "前面", "上面", "剛提到", "你提到", "你推薦", "推薦的",
     "它", "他", "那個", "這個", "那些", "這些", "其中", "深入", "詳細",
     "多介紹", "再介紹", "接著", "繼續", "第一個", "第二個", "第三個", "第四個",
+    "照片", "圖片", "相片", "實景", "更多", "再多說", "介紹一下",
 )
 ROUTE_MARKERS = ("行程", "路線", "安排", "串聯", "順遊", "順路", "半日", "一日", "兩天", "幾個景點", "一起玩")
 WEB_MARKERS = (
@@ -207,6 +213,7 @@ class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     history: list[HistoryTurn] = Field(default_factory=list)
     last_recommendations: list[str] = Field(default_factory=list)
+    active_topics: list[str] = Field(default_factory=list)
 
 
 kb_data: list[dict[str, Any]] = []
@@ -216,6 +223,10 @@ doc_norms: list[float] = []
 kb_mtime: float | None = None
 _official_attractions_cache: list[dict[str, Any]] = []
 _official_attractions_cache_at: float = 0.0
+_official_page_image_cache: dict[str, list[dict[str, str]]] = {}
+_official_album_cache: list[dict[str, Any]] = []
+_official_album_cache_at: float = 0.0
+_trusted_image_urls: set[str] = set()
 
 
 def normalize_text(text: str) -> str:
@@ -442,7 +453,12 @@ def recent_answer_entities(history: list[HistoryTurn]) -> list[str]:
     return entities[:8]
 
 
-def resolve_question(question: str, history: list[HistoryTurn], last_recommendations: list[str]) -> tuple[str, list[str]]:
+def resolve_question(
+    question: str,
+    history: list[HistoryTurn],
+    last_recommendations: list[str],
+    active_topics: list[str] | None = None,
+) -> tuple[str, list[str]]:
     """把「它、第二個、剛剛推薦的幾個」解析成可檢索的具體問題。"""
     question = question.strip()
     q_norm = normalize_text(question)
@@ -461,11 +477,13 @@ def resolve_question(question: str, history: list[HistoryTurn], last_recommendat
     if explicit_titles:
         return question, explicit_titles
 
-    if not is_followup_question(question) and not is_route_request(question):
+    continuation_by_state = bool(active_topics) and (wants_detail(question) or wants_images(question))
+    if not is_followup_question(question) and not is_route_request(question) and not continuation_by_state:
         return question, []
 
     rec_entities = recent_recommendation_entities(history, last_recommendations)
-    answer_entities = recent_answer_entities(history)
+    explicit_active = [topic for topic in (active_topics or []) if topic]
+    answer_entities = explicit_active or recent_answer_entities(history)
 
     idx = ordinal_index(question)
     q_norm = normalize_text(question)
@@ -664,7 +682,12 @@ def clean_markdown_for_local(text: str) -> str:
     return text.replace("**", "")
 
 
-def local_rag_answer(question: str, hits: list[dict[str, Any]], official_record: dict[str, Any] | None = None) -> str:
+def local_rag_answer(
+    question: str,
+    hits: list[dict[str, Any]],
+    official_record: dict[str, Any] | None = None,
+    available_images: list[dict[str, str]] | None = None,
+) -> str:
     if not hits:
         return (
             f"😅 這題目前資料庫裡還沒有足夠內容可以可靠回答「{question}」。\n\n"
@@ -674,7 +697,7 @@ def local_rag_answer(question: str, hits: list[dict[str, Any]], official_record:
     if len(hits) == 1:
         hit = hits[0]
         body = clean_markdown_for_local(hit["text"])
-        if wants_images(question) and official_record and official_images_from_record(official_record):
+        if wants_images(question) and available_images:
             return (
                 f"📷 **{official_record.get('name', hit['title'])}照片**\n\n"
                 "下面已放上桃園觀光導覽網官方資料提供的景點照片；點照片可開啟官方來源頁面。"
@@ -759,22 +782,23 @@ async def load_official_attractions() -> list[dict[str, Any]]:
             pictures.append({
                 "image_url": image_url,
                 "thumbnail_url": image_url,
-                "source_url": f"https://travel.tycg.gov.tw/zh-tw/travel/attraction/{record_id}" if record_id else "https://travel.tycg.gov.tw/",
+                "source_url": (_xml_child_text(element, "TYWebsite") or (f"https://travel.tycg.gov.tw/zh-tw/travel/attraction/{record_id}" if record_id else "https://travel.tycg.gov.tw/")),
                 "caption": _xml_child_text(element, f"Picdescribe{i}", f"PictureDescription{i}") or f"{name}｜桃園觀光導覽網官方照片",
             })
         records.append({
             "id": record_id,
             "name": name,
-            "summary": _xml_child_text(element, "Toldescribe", "Toldescribe"),
+            "summary": _xml_child_text(element, "Toldescribe"),
             "description": _xml_child_text(element, "Description", "Description1"),
             "address": _xml_child_text(element, "Add", "Address"),
             "open_time": _xml_child_text(element, "Opentime", "OpenTime"),
             "tel": _xml_child_text(element, "Tel", "Telephone"),
             "website": _xml_child_text(element, "Website"),
+            "ty_website": _xml_child_text(element, "TYWebsite"),
             "px": _xml_child_text(element, "Px", "Longitude"),
             "py": _xml_child_text(element, "Py", "Latitude"),
             "pictures": pictures,
-            "source_url": f"https://travel.tycg.gov.tw/zh-tw/travel/attraction/{record_id}" if record_id else "https://travel.tycg.gov.tw/",
+            "source_url": (_xml_child_text(element, "TYWebsite") or (f"https://travel.tycg.gov.tw/zh-tw/travel/attraction/{record_id}" if record_id else "https://travel.tycg.gov.tw/")),
         })
 
     # 去除因 root.iter() 可能造成的重複記錄。
@@ -852,6 +876,213 @@ def official_images_from_record(record: dict[str, Any] | None) -> list[dict[str,
         return []
     pictures = record.get("pictures") or []
     return [pic for pic in pictures if pic.get("image_url")][:4]
+
+
+
+def _looks_like_image_url(url: str) -> bool:
+    lower = (url or "").lower().split("?")[0]
+    return any(lower.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")) or any(
+        token in lower for token in ("/image/", "/images/", "/upload/", "/uploads/", "/photo/", "/photos/")
+    )
+
+
+def _register_trusted_images(images: list[dict[str, str]]) -> list[dict[str, str]]:
+    registered: list[dict[str, str]] = []
+    for image in images:
+        url = str(image.get("image_url") or "").strip()
+        if not url:
+            continue
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        _trusted_image_urls.add(url)
+        item = dict(image)
+        item["proxy_url"] = f"/image-proxy?url={quote(url, safe='')}"
+        registered.append(item)
+    return registered
+
+
+def _extract_urls_from_element(element: ET.Element) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for node in element.iter():
+        values = [node.text or "", *node.attrib.values()]
+        for value in values:
+            for match in re.findall(r"https?://[^\s<>'\"]+", unescape(value)):
+                url = match.rstrip("),.;")
+                if url not in seen:
+                    seen.add(url)
+                    urls.append(url)
+    return urls
+
+
+async def load_official_albums() -> list[dict[str, Any]]:
+    """讀取桃園觀光「觀光相簿」Open Data。
+
+    桃園官方把景點基本資料與相簿拆成不同資料集；這裡用寬鬆 XML 解析，
+    即使 Photos 內部欄位名稱調整，只要仍包含圖片 URL 就能抓到。
+    """
+    global _official_album_cache, _official_album_cache_at
+    now = time.time()
+    if _official_album_cache and now - _official_album_cache_at < OFFICIAL_CACHE_SECONDS:
+        return _official_album_cache
+
+    timeout = httpx.Timeout(12.0, connect=6.0)
+    headers = {"User-Agent": "Daxi-AI-Guide/6.0"}
+    root: ET.Element | None = None
+    used_url = ""
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        for endpoint in TYCG_ALBUM_OPEN_DATA_CANDIDATES:
+            try:
+                response = await client.get(endpoint)
+                response.raise_for_status()
+                candidate_root = ET.fromstring(response.content)
+                if candidate_root is not None:
+                    root = candidate_root
+                    used_url = endpoint
+                    break
+            except Exception:
+                continue
+
+    if root is None:
+        return _official_album_cache
+
+    records: list[dict[str, Any]] = []
+    for element in root.iter():
+        name = _xml_child_text(element, "Name")
+        if not name:
+            continue
+        urls = [url for url in _extract_urls_from_element(element) if _looks_like_image_url(url)]
+        if not urls:
+            continue
+        source_url = _xml_child_text(element, "TYWebsite", "Website") or used_url
+        photos = [
+            {
+                "image_url": url,
+                "thumbnail_url": url,
+                "source_url": source_url,
+                "caption": f"{name}｜桃園觀光導覽網官方相簿",
+            }
+            for url in urls[:8]
+        ]
+        records.append({"name": name, "source_url": source_url, "pictures": photos})
+
+    _official_album_cache = records
+    _official_album_cache_at = now
+    if records:
+        print(f"📷 桃園觀光官方相簿載入：{len(records)} 筆")
+    return records
+
+
+async def find_album_images(query: str, focus_entities: list[str] | None = None) -> list[dict[str, str]]:
+    records = await load_official_albums()
+    if not records:
+        return []
+    candidates = [*(focus_entities or []), query]
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for record in records:
+        score = max(
+            (attraction_match_score(candidate, str(record.get("name", ""))) for candidate in candidates if candidate),
+            default=0.0,
+        )
+        if score >= 50:
+            ranked.append((score, record))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    images: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for _, record in ranked[:3]:
+        for image in record.get("pictures") or []:
+            url = image.get("image_url", "")
+            if url and url not in seen:
+                seen.add(url)
+                images.append(image)
+            if len(images) >= 4:
+                return images
+    return images
+
+
+async def scrape_official_page_images(record: dict[str, Any] | None) -> list[dict[str, str]]:
+    """直接從桃園觀光官方景點頁找 OG / img 圖片，作為相簿 API 的第二層備援。"""
+    if not record:
+        return []
+    source_url = str(record.get("source_url") or "").strip()
+    if not source_url:
+        return []
+    if source_url in _official_page_image_cache:
+        return _official_page_image_cache[source_url]
+
+    try:
+        timeout = httpx.Timeout(12.0, connect=6.0)
+        headers = {
+            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/6.0",
+            "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
+        }
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+            response = await client.get(source_url)
+            response.raise_for_status()
+            html = response.text
+    except Exception as exc:
+        print(f"⚠️ 官方景點頁圖片解析失敗：{exc}")
+        _official_page_image_cache[source_url] = []
+        return []
+
+    candidates: list[str] = []
+    patterns = [
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        r'<img[^>]+(?:data-src|data-original|src)=["\']([^"\']+)',
+        r'<source[^>]+srcset=["\']([^"\']+)',
+    ]
+    for pattern in patterns:
+        for raw in re.findall(pattern, html, flags=re.I):
+            raw = unescape(raw).strip().split(",")[0].split()[0]
+            if raw.startswith("data:"):
+                continue
+            url = urljoin(source_url, raw)
+            lower = url.lower()
+            if any(bad in lower for bad in ("logo", "icon", "sprite", "favicon", "qrcode", "avatar")):
+                continue
+            if not _looks_like_image_url(url):
+                continue
+            if url not in candidates:
+                candidates.append(url)
+
+    name = str(record.get("name") or "景點")
+    images = [
+        {
+            "image_url": url,
+            "thumbnail_url": url,
+            "source_url": source_url,
+            "caption": f"{name}｜桃園觀光導覽網官方頁面照片",
+        }
+        for url in candidates[:4]
+    ]
+    _official_page_image_cache[source_url] = images
+    return images
+
+
+async def get_official_images(
+    query: str,
+    record: dict[str, Any] | None,
+    focus_entities: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """依可靠度合併：景點資料內圖片 → 官方相簿 → 官方景點頁。"""
+    sources = [
+        *official_images_from_record(record),
+        *(await find_album_images(query, focus_entities)),
+        *(await scrape_official_page_images(record)),
+    ]
+    combined: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for image in sources:
+        url = str(image.get("image_url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        combined.append(image)
+        if len(combined) >= 4:
+            break
+    return _register_trusted_images(combined)
 
 
 def wants_detail(question: str) -> bool:
@@ -1082,7 +1313,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="5.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="6.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -1125,18 +1356,60 @@ def get_init_topics() -> dict[str, list[str]]:
     return {"topics": [item["title"] for item in kb_data]}
 
 
+@app.get("/image-proxy")
+async def image_proxy(url: str = Query(min_length=8, max_length=3000)) -> Response:
+    """代理本輪已驗證的官方圖片，避免來源網站防盜連 / referrer 政策造成前端不顯示。"""
+    if url not in _trusted_image_urls:
+        raise HTTPException(status_code=403, detail="圖片網址尚未通過本輪官方來源驗證")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="不支援的圖片網址")
+    try:
+        timeout = httpx.Timeout(15.0, connect=6.0)
+        headers = {
+            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/6.0",
+            "Referer": "https://travel.tycg.gov.tw/",
+        }
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+            remote = await client.get(url)
+            remote.raise_for_status()
+        content_type = remote.headers.get("content-type", "").split(";")[0].strip().lower()
+        if not content_type.startswith("image/"):
+            raise HTTPException(status_code=415, detail="來源不是圖片")
+        if len(remote.content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="圖片檔案過大")
+        return Response(
+            content=remote.content,
+            media_type=content_type,
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"官方圖片載入失敗：{exc}") from exc
+
+
 @app.post("/chat")
 async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
     rate_limit_or_raise(request)
     question = payload.question.strip()
     history = payload.history[-MAX_HISTORY_TURNS:]
 
-    resolved_question, focus_entities = resolve_question(question, history, payload.last_recommendations)
+    resolved_question, focus_entities = resolve_question(
+        question,
+        history,
+        payload.last_recommendations,
+        payload.active_topics,
+    )
     hits = retrieve(resolved_question, focus_entities=focus_entities)
     use_web = should_use_web(question, hits, resolved_question)
     official_record: dict[str, Any] | None = None
     if use_web or wants_detail(question) or wants_images(question):
         official_record = await find_official_attraction(resolved_question, focus_entities)
+
+    base_images: list[dict[str, str]] = []
+    if wants_images(question):
+        base_images = await get_official_images(resolved_question, official_record, focus_entities)
 
     recommendations = choose_recommendations(hits, resolved_question) if hits else [item["title"] for item in kb_data[:3]]
     data_sources = [
@@ -1148,10 +1421,10 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         for hit in hits
     ]
     official_source = official_source_from_record(official_record)
-    images: list[dict[str, str]] = official_images_from_record(official_record) if wants_images(question) else []
+    images: list[dict[str, str]] = list(base_images)
 
     try:
-        answer, web_sources, images = await openai_rag_answer(
+        answer, web_sources, web_images = await openai_rag_answer(
             question=question,
             resolved_question=resolved_question,
             hits=hits,
@@ -1159,6 +1432,17 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
             use_web=use_web,
             official_record=official_record,
         )
+        merged_images: list[dict[str, str]] = []
+        seen_image_urls: set[str] = set()
+        for image in [*base_images, *web_images]:
+            url = str(image.get("image_url") or "").strip()
+            if not url or url in seen_image_urls:
+                continue
+            seen_image_urls.add(url)
+            merged_images.append(image)
+            if len(merged_images) >= 4:
+                break
+        images = _register_trusted_images(merged_images)
         mode = "openai-web-rag" if use_web and (web_sources or images or official_source) else "openai-rag"
         sources: list[dict[str, Any]] = [*data_sources]
         if official_source:
@@ -1186,20 +1470,27 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
                     official_record=official_record,
                 )
                 sources = [*data_sources, *([official_source] if official_source else [])]
-                images = official_images_from_record(official_record) if wants_images(question) else []
+                images = list(base_images)
                 mode = "openai-rag"
             except Exception as second_exc:
                 print(f"⚠️ OpenAI 也不可用，改採本地 RAG：{second_exc}")
-                answer = local_rag_answer(question, hits, official_record)
+                answer = local_rag_answer(question, hits, official_record, base_images)
                 sources = [*data_sources, *([official_source] if official_source else [])]
-                images = official_images_from_record(official_record) if wants_images(question) else []
+                images = list(base_images)
                 mode = "local-rag"
         else:
             print(f"⚠️ OpenAI 不可用，改採本地 RAG：{exc}")
-            answer = local_rag_answer(question, hits, official_record)
+            answer = local_rag_answer(question, hits, official_record, base_images)
             sources = [*data_sources, *([official_source] if official_source else [])]
-            images = official_images_from_record(official_record) if wants_images(question) else []
+            images = list(base_images)
             mode = "local-rag"
+
+    if focus_entities:
+        active_topics = list(dict.fromkeys(focus_entities))[:5]
+    elif hits:
+        active_topics = [hits[0]["title"]]
+    else:
+        active_topics = [topic for topic in payload.active_topics if topic][:5]
 
     return {
         "answer": answer,
@@ -1209,6 +1500,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "web_used": any(source.get("type") == "web" for source in sources),
         "images": images,
         "resolved_question": resolved_question,
+        "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
     }
 

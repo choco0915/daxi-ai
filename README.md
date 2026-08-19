@@ -37,7 +37,7 @@ python -m pip install -r requirements.txt
 
 ```env
 OPENAI_API_KEY=your_new_openai_api_key_here
-OPENAI_MODEL=gpt-5.6-luna
+OPENAI_MODEL=gpt-5.6
 WEB_SEARCH_ENABLED=true
 CHAT_RATE_LIMIT=30
 CHAT_RATE_WINDOW_SECONDS=60
@@ -144,3 +144,27 @@ uvicorn app:app --host 0.0.0.0 --port $PORT
 - 當使用者輸入「照片／圖片」時，會優先從官方 Open Data 取得景點圖片；若 OpenAI web search 可用，也會使用官方網域的 image search 結果。
 - 官方 Open Data 路徑不依賴 OpenAI，因此即使 OpenAI 暫時失敗，只要 Render 可連上桃園觀光官方資料，仍可顯示較完整的景點介紹與官方圖片。
 - 中央聊天區背景已改成透明，讓動態光影背景直接顯示；聊天頭像也稍微放大。
+
+## V6：修正「照片不顯示」與話題斷線
+
+這版修正兩個根因：
+
+1. `OPENAI_MODEL` 改為官方目前可用於 Responses API + `web_search` 的 `gpt-5.6`。如果 Render 仍保留舊的 `gpt-5.6-luna`，請手動改成 `gpt-5.6`，否則 OpenAI 會失敗並退回本地 RAG。
+2. 桃園市景點 Open Data 本身沒有照片欄位；V6 改成三層照片來源：
+   - 桃園觀光「觀光相簿」Open Data
+   - 桃園觀光官方景點頁的 `og:image` / `img`
+   - OpenAI `web_search` 的官方網域 image results
+
+前端顯示圖片時會優先走 `/image-proxy`，由 FastAPI 代理本輪已驗證的官方圖片，降低來源站防盜連或 referrer 政策造成圖片空白的機率。
+
+多輪對話則新增 `active_topics` 顯式狀態。每一輪後端會把目前正在談的景點回傳前端並保存，下一輪會再送回後端，所以現在可直接接著說：
+
+```text
+福仁宮
+照片
+再詳細一點
+那附近還有什麼？
+把剛剛推薦的三個排成半日遊
+```
+
+即使句子裡沒有再次寫「福仁宮」，系統也會優先沿用上一輪主題。

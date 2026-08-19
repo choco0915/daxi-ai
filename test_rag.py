@@ -127,6 +127,29 @@ class RagRetrievalTests(unittest.TestCase):
         self.assertEqual(len(images), 1)
         self.assertEqual(images[0]["caption"], "福仁宮")
 
+    def test_active_topic_continues_for_photo_request(self) -> None:
+        resolved, focus = app.resolve_question("照片", [], [], ["福仁宮"])
+        self.assertEqual(focus, ["福仁宮"])
+        self.assertIn("福仁宮", resolved)
+        titles = [h["title"] for h in app.retrieve(resolved, focus_entities=focus)]
+        self.assertEqual(titles, ["福仁宮"])
+
+    def test_active_topic_continues_for_detail_request(self) -> None:
+        resolved, focus = app.resolve_question("再詳細一點", [], [], ["大溪木藝生態博物館"])
+        self.assertEqual(focus, ["大溪木藝生態博物館"])
+        titles = [h["title"] for h in app.retrieve(resolved, focus_entities=focus)]
+        self.assertEqual(titles, ["大溪木藝生態博物館"])
+
+    def test_registered_image_has_proxy_url(self) -> None:
+        images = app._register_trusted_images([{
+            "image_url": "https://travel.tycg.gov.tw/upload/furen.jpg",
+            "thumbnail_url": "https://travel.tycg.gov.tw/upload/furen.jpg",
+            "source_url": "https://travel.tycg.gov.tw/zh-tw/travel/attraction/1172",
+            "caption": "福仁宮",
+        }])
+        self.assertEqual(len(images), 1)
+        self.assertTrue(images[0]["proxy_url"].startswith("/image-proxy?url="))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

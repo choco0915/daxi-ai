@@ -929,7 +929,7 @@
     <script>
         "use strict";
 
-        const STORAGE_KEY = "daxi-ai-chats-v3";
+        const STORAGE_KEY = "daxi-ai-chats-v6";
         const STORYMAP_URL = "https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27";
         const QUICK_QUESTIONS = [
             "大溪老街有什麼歷史特色？",
@@ -1057,7 +1057,8 @@
             chats[id] = {
                 title: "新對話",
                 createdAt: Date.now(),
-                messages: []
+                messages: [],
+                activeTopics: []
             };
             saveChats();
             renderChatArea();
@@ -1210,7 +1211,7 @@
 
                 images.slice(0, 4).forEach((imageInfo) => {
                     const sourceUrl = String(imageInfo?.source_url || "").trim();
-                    const imageUrl = String(imageInfo?.thumbnail_url || imageInfo?.image_url || "").trim();
+                    const imageUrl = String(imageInfo?.proxy_url || imageInfo?.thumbnail_url || imageInfo?.image_url || "").trim();
                     if (!imageUrl) return;
 
                     const card = document.createElement(sourceUrl ? "a" : "div");
@@ -1227,14 +1228,18 @@
                     img.alt = String(imageInfo?.caption || "大溪景點照片");
                     img.loading = "lazy";
                     img.referrerPolicy = "no-referrer";
+                    const fallbackCandidates = [
+                        String(imageInfo?.thumbnail_url || "").trim(),
+                        String(imageInfo?.image_url || "").trim()
+                    ].filter((url, index, arr) => url && arr.indexOf(url) === index && url !== imageUrl);
                     img.addEventListener("error", () => {
-                        const fallback = String(imageInfo?.image_url || "").trim();
-                        if (fallback && img.src !== fallback) {
+                        const fallback = fallbackCandidates.shift();
+                        if (fallback) {
                             img.src = fallback;
                         } else {
                             card.style.display = "none";
                         }
-                    }, { once: true });
+                    });
 
                     const caption = document.createElement("div");
                     caption.className = "answer-image-caption";
@@ -1527,6 +1532,24 @@
             return [];
         }
 
+        function getActiveTopics() {
+            if (!currentChatId || !chats[currentChatId]) return [];
+            const chat = chats[currentChatId];
+            if (Array.isArray(chat.activeTopics) && chat.activeTopics.length) {
+                return chat.activeTopics.map(String).filter(Boolean).slice(0, 5);
+            }
+
+            // 舊版 localStorage 沒有 activeTopics 時，從最近一次豆干弟來源自動恢復主題。
+            const messages = chat.messages || [];
+            for (let i = messages.length - 1; i >= 0; i -= 1) {
+                const item = messages[i];
+                if (item.sender !== "bot") continue;
+                const inferred = sourceTitlesForBackend(item.sources);
+                if (inferred.length) return inferred.slice(0, 2);
+            }
+            return [];
+        }
+
         async function askQuestion(question) {
             if (isSending) return;
             const cleanQuestion = String(question || "").trim();
@@ -1538,6 +1561,7 @@
 
             const historyForBackend = getHistoryForBackend();
             const lastRecommendations = getLastRecommendations();
+            const activeTopics = getActiveTopics();
             clearWelcome();
             recContainer.replaceChildren();
             appendMessage("user", cleanQuestion);
@@ -1552,7 +1576,8 @@
                     body: JSON.stringify({
                         question: cleanQuestion,
                         history: historyForBackend,
-                        last_recommendations: lastRecommendations
+                        last_recommendations: lastRecommendations,
+                        active_topics: activeTopics
                     })
                 });
 
@@ -1576,6 +1601,12 @@
                 }
 
                 const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
+                if (currentChatId && chats[currentChatId]) {
+                    chats[currentChatId].activeTopics = Array.isArray(data.active_topics)
+                        ? data.active_topics.map(String).filter(Boolean).slice(0, 5)
+                        : activeTopics;
+                    saveChats();
+                }
                 await appendBotMessage(
                     data.answer || "目前沒有取得回答。",
                     Array.isArray(data.sources) ? data.sources : [],

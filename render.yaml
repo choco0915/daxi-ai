@@ -12,7 +12,7 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
-        value: gpt-5.6-luna
+        value: gpt-5.6
       - key: CHAT_RATE_LIMIT
         value: "30"
       - key: CHAT_RATE_WINDOW_SECONDS
