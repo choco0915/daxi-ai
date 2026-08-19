@@ -26,8 +26,7 @@ class RagRetrievalTests(unittest.TestCase):
         resolved, focus = app.resolve_question("大溪有什麼好吃的？", [], [])
         hits = app.retrieve(resolved, focus_entities=focus)
         titles = {item["title"] for item in hits[:4]}
-        self.assertIn("傳統豆干老店", titles)
-        self.assertIn("傳統甜品與小吃", titles)
+        self.assertIn("大溪必吃美食總覽", titles)
 
     def test_624(self) -> None:
         self.assert_top_contains("六月二十四是什麼活動？", "六二四（大溪六月二十四）", 1)
@@ -304,9 +303,9 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("陳媽媽月光餅", answer)
         self.assertIn("和平路87號", answer)
 
-    def test_public_results_beat_broad_kb_when_no_direct_topic(self) -> None:
+    def test_rich_data_md_mooncake_beats_public_fallback(self) -> None:
         hits = app.retrieve("月光餅")
-        self.assertFalse(app.has_direct_kb_topic("月光餅", hits))
+        self.assertTrue(app.has_direct_kb_topic("月光餅", hits))
         answer = app.local_rag_answer(
             "月光餅",
             hits,
@@ -318,8 +317,9 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
                 "snippet": "月光餅是大溪老街的特色食品之一。",
             }],
         )
-        self.assertIn("網路補充", answer)
-        self.assertIn("月光餅", answer)
+        self.assertIn("陳媽媽月光餅", answer)
+        self.assertIn("和平路87號", answer)
+        self.assertNotIn("網路補充", answer)
 
     def test_external_topic_can_continue_to_photo(self) -> None:
         resolved, focus = app.resolve_question("照片", [], [], ["陳媽媽月光餅"])
@@ -420,10 +420,10 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(hits)
         self.assertFalse(app.should_discover_external("大溪有哪些必吃美食？", hits, []))
 
-    def test_specific_mooncake_still_discovers_external(self) -> None:
+    def test_specific_mooncake_no_longer_needs_external_discovery(self) -> None:
         hits = app.retrieve("月光餅")
         self.assertTrue(hits)
-        self.assertTrue(app.should_discover_external("月光餅", hits, []))
+        self.assertFalse(app.should_discover_external("月光餅", hits, []))
 
 
     def test_v14_daxi_nearby_shopping_parser(self) -> None:
@@ -470,6 +470,34 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
         item = next(x for x in items if x.get("name") == "大溪麥芽花生糖")
         self.assertGreaterEqual(app._catalog_match_score("古早味花生糖", item), 80)
 
+
+
+    def test_v17_common_shops_have_direct_kb_chunks(self) -> None:
+        cases = {
+            "豬腳": "萬家老街豬腳",
+            "蜂蜜": "阿枝蜂蜜",
+            "月光餅": "陳媽媽月光餅",
+            "拿破崙派": "大溪拿破崙派",
+            "碗粿": "里長嬤碗粿",
+        }
+        for query, expected in cases.items():
+            with self.subTest(query=query):
+                hits = app.retrieve(query)
+                self.assertTrue(hits)
+                self.assertEqual(hits[0]["title"], expected)
+
+    def test_v17_detail_followup_is_longer_than_first_answer(self) -> None:
+        hits = app.retrieve("豬腳")
+        normal = app.local_rag_answer("豬腳", hits)
+        detailed = app.local_rag_answer("再詳細一點", hits)
+        self.assertGreater(len(detailed), len(normal) + 80)
+        self.assertIn("品嚐與導覽重點", detailed)
+        self.assertIn("康莊路20號", detailed)
+
+    def test_v17_rich_detail_does_not_require_web(self) -> None:
+        resolved, focus = app.resolve_question("再詳細一點", [], [], ["萬家老街豬腳"])
+        hits = app.retrieve(resolved, focus_entities=focus)
+        self.assertFalse(app.should_use_web("再詳細一點", hits, resolved))
 
 
 if __name__ == "__main__":

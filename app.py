@@ -41,7 +41,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6")
 OPENAI_FALLBACK_MODEL = os.getenv("OPENAI_FALLBACK_MODEL", "gpt-5.6-luna").strip()
 WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 TOP_K = 6
-MIN_RETRIEVAL_SCORE = 0.08
+MIN_RETRIEVAL_SCORE = 0.10
 MAX_HISTORY_TURNS = 10
 STORYMAP_URL = "https://storymaps.arcgis.com/stories/b704c98b362041c1be364ad2c8ca3d27"
 TYCG_ATTRACTIONS_OPEN_DATA = "https://travel.tycg.gov.tw/zh-tw/OpenData/TYCGAttractions"
@@ -101,12 +101,12 @@ QUERY_EXPANSIONS: dict[str, str] = {
     "巴洛克": "大溪老街建築 街屋 牌樓 拱門 柱式 山牆 洗石子",
     "牌樓": "大溪老街建築 街屋 巴洛克 山牆 洗石子",
     "老街建築": "大溪老街建築 巴洛克 街屋 山牆 洗石子",
-    "豆干": "傳統豆干老店 黃日香 黃大目 廖心蘭 美食",
-    "豆乾": "傳統豆干老店 豆干 黃日香 黃大目 廖心蘭 美食",
-    "豆花": "傳統甜品與小吃 賴媽媽豆花 美食",
-    "吃什麼": "美食 傳統豆干老店 傳統甜品與小吃 伴手禮推薦",
-    "好吃": "美食 傳統豆干老店 傳統甜品與小吃 伴手禮推薦",
-    "美食": "傳統豆干老店 傳統甜品與小吃 伴手禮推薦",
+    "豆干": "大溪必吃美食總覽 黃日香豆干 大房豆干 廖心蘭豆干 老阿伯現滷豆干 黃大目豆干 美食",
+    "豆乾": "大溪必吃美食總覽 豆干 黃日香豆干 大房豆干 廖心蘭豆干 老阿伯現滷豆干 黃大目豆干 美食",
+    "豆花": "大溪必吃美食總覽 賴媽媽豆花 小鎮豆花 美食",
+    "吃什麼": "大溪必吃美食總覽 豆干 豆花 碗粿 湯圓 月光餅 花生糖 豬腳 油飯",
+    "好吃": "大溪必吃美食總覽 豆干 豆花 碗粿 湯圓 月光餅 花生糖 豬腳 油飯",
+    "美食": "大溪必吃美食總覽 豆干 豆花 碗粿 湯圓 月光餅 花生糖 豬腳 油飯",
     "景點": "大溪老街 中正公園 大溪橋 武德殿 大溪公會堂 大溪木藝生態博物館 鳳飛飛故事館",
     "去哪": "景點 大溪老街 中正公園 大溪橋 木藝生態博物館",
     "停車": "交通 停車 月眉停車場 大溪橋頭停車場 停二停車場",
@@ -133,12 +133,12 @@ INTENT_TITLE_BOOSTS: dict[str, list[str]] = {
     "巴洛克": ["大溪老街建築"],
     "牌樓": ["大溪老街建築"],
     "老街建築": ["大溪老街建築"],
-    "豆干": ["傳統豆干老店"],
-    "豆乾": ["傳統豆干老店"],
-    "豆花": ["傳統甜品與小吃"],
-    "吃什麼": ["傳統豆干老店", "傳統甜品與小吃", "伴手禮推薦"],
-    "好吃": ["傳統豆干老店", "傳統甜品與小吃", "伴手禮推薦"],
-    "美食": ["傳統豆干老店", "傳統甜品與小吃", "伴手禮推薦"],
+    "豆干": ["大溪必吃美食總覽", "黃日香豆干", "大房食品股份有限公司（大房豆干）", "廖心蘭豆干店", "老阿伯現滷豆干", "黃大目豆干"],
+    "豆乾": ["大溪必吃美食總覽", "黃日香豆干", "大房食品股份有限公司（大房豆干）", "廖心蘭豆干店", "老阿伯現滷豆干", "黃大目豆干"],
+    "豆花": ["大溪必吃美食總覽", "賴媽媽豆花", "小鎮豆花"],
+    "吃什麼": ["大溪必吃美食總覽"],
+    "好吃": ["大溪必吃美食總覽"],
+    "美食": ["大溪必吃美食總覽"],
     "停車": ["交通、停車與實用注意事項"],
     "開車": ["交通、停車與實用注意事項"],
     "公車": ["交通、停車與實用注意事項"],
@@ -167,9 +167,9 @@ FOCUS_TITLE_GROUPS: dict[str, list[str]] = {
     "木器": ["大溪木藝", "大溪木藝生態博物館"],
     "巴洛克": ["大溪老街建築", "大溪老街"],
     "牌樓": ["大溪老街建築", "大溪老街"],
-    "豆干": ["傳統豆干老店", "伴手禮推薦"],
-    "豆乾": ["傳統豆干老店", "伴手禮推薦"],
-    "豆花": ["傳統甜品與小吃"],
+    "豆干": ["大溪必吃美食總覽", "黃日香豆干", "大房食品股份有限公司（大房豆干）", "廖心蘭豆干店", "老阿伯現滷豆干", "黃大目豆干"],
+    "豆乾": ["大溪必吃美食總覽", "黃日香豆干", "大房食品股份有限公司（大房豆干）", "廖心蘭豆干店", "老阿伯現滷豆干", "黃大目豆干"],
+    "豆花": ["大溪必吃美食總覽", "賴媽媽豆花", "小鎮豆花"],
     "鳳飛飛": ["鳳飛飛", "鳳飛飛故事館"],
     "六月二十四": ["六二四（大溪六月二十四）", "大溪社頭文化", "普濟堂"],
     "六二四": ["六二四（大溪六月二十四）", "大溪社頭文化", "普濟堂"],
@@ -205,7 +205,11 @@ WEB_MARKERS = (
     "照片", "圖片", "相片", "實景", "外觀", "附近", "周邊", "鄰近",
 )
 
-DETAIL_MARKERS = ("詳細", "深入", "完整介紹", "仔細介紹", "多介紹", "進一步", "更多資訊")
+DETAIL_MARKERS = (
+    "詳細", "深入", "完整介紹", "仔細介紹", "多介紹", "進一步", "更多資訊",
+    "詳細一點", "再詳細一點", "更詳細", "詳細資料", "詳細資訊", "完整資料",
+    "多說一點", "再多說一點", "講詳細", "介紹詳細", "細節", "多一點資料",
+)
 IMAGE_MARKERS = ("照片", "圖片", "相片", "實景", "外觀照片", "看看照片", "看照片")
 
 # 這些是 data.md 已經有完整內容的「廣泛類別問題」。
@@ -242,8 +246,8 @@ SYSTEM_INSTRUCTIONS = """你是「豆干弟」，一位親切、自然、熟悉�
 11. 行程安排應以使用者指定／前文推薦的景點為核心，不要無故塞入新的景點；若新增可選站點，要清楚標成「可選」。
 
 【詳細介紹與照片】
-12. 使用者明確說「詳細、深入、完整介紹」時，不能只重複 data.md 的一小段。請在仍緊扣同一主題的前提下，優先用官方網路來源補足細節；可依資料涵蓋歷史沿革、信仰／文化、建築特色、值得留意之處與參觀實用資訊。
-13. 詳細介紹通常以約 300～550 個中文字為目標；若官方來源資訊較少，寧可少寫，也不要臆測。
+12. 使用者明確說「詳細、深入、完整介紹、再詳細一點」時，先完整利用 data.md 中該主題的整個獨立章節，而不是重複上一輪摘要。若 data.md 已含「核心介紹／特色／地址／營業資訊／參觀重點」等欄位，應依這些欄位分段回答；只有 data.md 確實不足或使用者要求最新資訊時，才用官方網路來源補足。
+13. 詳細介紹通常以約 450～900 個中文字為目標，可視 data.md 實際資料量調整；優先涵蓋背景、特色、看點、地址、電話、營業／開放資訊與參觀建議。若可靠資料較少，寧可少寫，也不要臆測。
 14. 使用者要求「照片、圖片、相片」時，若工具提供 image results，正文只需簡短說明，照片由介面另外顯示；不要回答成與前一輪完全相同的文字。
 
 【表達方式】
@@ -424,7 +428,7 @@ def parse_data_md(content: str) -> list[dict[str, str]]:
             continue
 
         if title is not None:
-            body.append(stripped[4:].strip() if stripped.startswith("### ") else line)
+            body.append(stripped if stripped.startswith("### ") else line)
 
     flush()
     return [chunk for chunk in chunks if chunk["title"]]
@@ -894,6 +898,93 @@ def _focused_kb_mentions(question: str, hits: list[dict[str, Any]], limit: int =
     return mentions
 
 
+def _direct_kb_hit(question: str, hits: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """找出最直接對應使用者主題的 data.md 獨立章節。
+
+    V17 讓「豬腳、蜂蜜、豆花、月光餅」這類短詞也能直接命中
+    「萬家老街豬腳、阿枝蜂蜜、賴媽媽豆花、陳媽媽月光餅」等獨立章節。
+    對「再詳細一點」這類延續問句，retrieve() 已經依 active_topics 鎖定主題，
+    因此直接使用第一個高相關 hit。
+    """
+    if not hits:
+        return None
+    if wants_detail(question):
+        return hits[0]
+
+    base = re.sub(r"[|｜].*$", "", question).strip()
+    q = normalize_text(base)
+    if len(q) < 2:
+        return None
+    for hit in hits:
+        title = normalize_text(str(hit.get("title") or ""))
+        if title and (q in title or title in q):
+            return hit
+    return None
+
+
+def _format_kb_detail_answer(
+    hit: dict[str, Any],
+    detailed: bool = False,
+    official_record: dict[str, Any] | None = None,
+) -> str:
+    title = str(hit.get("title") or "大溪導覽")
+    raw = str(hit.get("text") or "").strip()
+    body = clean_markdown_for_local(raw)
+    if detailed:
+        parts = [f"🏮 **{title}｜詳細導覽**", body]
+        # 若官方資料層有比 data.md 更多或較新的補充，附在最後，不取代 data.md 主體。
+        if official_record:
+            supplements: list[str] = []
+            official_detail = str(official_record.get("description") or official_record.get("summary") or "").strip()
+            if official_detail and normalize_text(official_detail) not in normalize_text(body):
+                supplements.append(official_detail)
+            for label, key in (("地址", "address"), ("營業／開放資訊", "open_time"), ("電話", "tel")):
+                value = str(official_record.get(key) or "").strip()
+                if value and normalize_text(value) not in normalize_text(body):
+                    supplements.append(f"• **{label}**：{value}")
+            if supplements:
+                parts.append("### 官方資料補充\n" + "\n".join(supplements))
+        return "\n\n".join(parts).strip()
+
+    # 一般第一次詢問先給「好讀摘要」，保留完整章節給下一句「再詳細一點」。
+    # 這樣 follow-up 會真正增加資訊量，而不是把上一輪原封不動再貼一次。
+    lines = raw.splitlines()
+    intro_lines: list[str] = []
+    facts: list[str] = []
+    in_intro = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("### "):
+            section = stripped[4:].strip()
+            in_intro = section in {"介紹", "核心介紹", "人物介紹", "產業背景", "建築風格"}
+            continue
+        if in_intro and stripped and not stripped.startswith(("*", "-")):
+            intro_lines.append(stripped)
+        if stripped.startswith(("*", "-")) and any(key in stripped for key in ("地址", "電話", "營業／開放資訊", "開放資訊")):
+            fact = re.sub(r"^[*-]\s*", "• ", stripped).replace("**", "")
+            if fact not in facts:
+                facts.append(fact)
+
+    intro = "".join(intro_lines).strip()
+    if not intro:
+        # 沒有結構化小標時，取第一個非空段落。
+        for paragraph in re.split(r"\n\s*\n", body):
+            clean = paragraph.strip()
+            if clean and not clean.startswith("###"):
+                intro = clean
+                break
+    if len(intro) > 240:
+        intro = intro[:240].rstrip("，。、；： ") + "…"
+
+    parts = [f"🏮 **{title}**"]
+    if intro:
+        parts.append(intro)
+    if facts:
+        parts.append("\n".join(facts[:3]))
+    parts.append("想看更完整的背景、特色與參觀／選購重點，可以直接跟我說「再詳細一點」。")
+    return "\n\n".join(parts).strip()
+
+
 def local_rag_answer(
     question: str,
     hits: list[dict[str, Any]],
@@ -927,6 +1018,12 @@ def local_rag_answer(
             "這一輪仍沒有取得可安全顯示的官方圖片網址。豆干弟不會用不明來源圖片代替。\n\n"
             "你可以點下方的官方來源頁；新版也會把這次圖片抓取失敗原因寫進診斷資訊，方便直接排查。"
         )
+
+    # V17：只要 data.md 已有該店家／景點的獨立且內容充足章節，優先使用它。
+    # 這避免 bundled official catalog 只有店名時，反而把 richer data.md 蓋掉。
+    direct_kb = _direct_kb_hit(question, hits)
+    if direct_kb:
+        return _format_kb_detail_answer(direct_kb, detailed=wants_detail(question), official_record=official_record)
 
     # data.md 沒有獨立章節，但桃園官方「消費／美食」有直接命中的實體時，
     # 例如「月光餅 → 陳媽媽月光餅」，應優先回答官方實體，而不是退回寬泛的美食章節。
@@ -2813,7 +2910,22 @@ def explicit_web_request(question: str) -> bool:
 def should_use_web(question: str, hits: list[dict[str, Any]], resolved_question: str) -> bool:
     if not WEB_SEARCH_ENABLED:
         return False
+
     q = normalize_text(question)
+    freshness_markers = (
+        "網路", "上網", "查網路", "官網", "官方", "最新", "現在", "目前", "今天", "近期",
+        "營業", "開放", "休館", "票價", "門票", "活動", "交通異動", "電話", "地址", "時間", "時刻",
+    )
+
+    # V17：data.md 已經收錄完整店家／景點資料時，「詳細一點」本身不再強迫上網。
+    # 這能在 OpenAI quota 不足或外站連線失敗時，仍穩定提供比上一輪更完整的內容。
+    if wants_detail(question) and hits:
+        rich_hit = hits[0]
+        if len(str(rich_hit.get("text") or "")) >= 180 and not any(
+            normalize_text(marker) in q for marker in freshness_markers
+        ):
+            return False
+
     if any(normalize_text(marker) in q for marker in WEB_MARKERS):
         return True
     if is_route_request(resolved_question):
@@ -3006,8 +3118,8 @@ async def openai_rag_answer(
     extra_requirements: list[str] = []
     if detailed:
         extra_requirements.append(
-            "使用者要求詳細介紹：請緊扣同一主題，若官方搜尋有資料，補足歷史沿革、文化／信仰、建築或特色看點與實用資訊；"
-            "約 300～550 個中文字，不要只把 data.md 原句再說一次。"
+            "使用者要求詳細介紹：請緊扣同一主題，完整利用 data.md 該主題章節的全部資訊；若章節有介紹、特色、地址、電話、營業／開放資訊與參觀建議，請分段呈現。"
+            "只有 data.md 不足或需要核對會變動資訊時才用官方搜尋補充；目標約 450～900 個中文字，不要重複上一輪短摘要。"
         )
     if include_images:
         extra_requirements.append(
@@ -3123,7 +3235,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="16.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="17.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -3208,7 +3320,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "16.0.0",
+        "app_version": "17.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -3243,7 +3355,7 @@ async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) ->
     record = await find_official_entity(name, [name])
     public_results = [] if record else await public_web_search(name, limit=5)
     return {
-        "app_version": "16.0.0",
+        "app_version": "17.0.0",
         "query": name,
         "direct_kb_topic": has_direct_kb_topic(name, hits),
         "kb_titles": [hit.get("title") for hit in hits],
@@ -3282,7 +3394,7 @@ async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) ->
             matched_gallery = gallery_url
             break
     return {
-        "app_version": "16.0.0",
+        "app_version": "17.0.0",
         "query": name,
         "official_record": {
             "name": record.get("name"),
@@ -3327,7 +3439,9 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
     # V10：官方實體不再只有「景點」。桃園觀光的美食／消費 Open Data 也納入，
     # 所以「月光餅、某家豆花、某店家」即使 data.md 沒有獨立章節，也可以直接被搜尋與延續。
     official_record: dict[str, Any] | None = None
-    if use_web or discover_external or wants_detail(question) or wants_images(question) or wants_nearby(question) or is_route_request(question):
+    # V17：若 data.md 已有完整章節，單純「再詳細一點」不需要先連外。
+    # 只有查最新／地址時間（use_web）、外部新名詞、照片、附近或路線時才讀官方資料。
+    if use_web or discover_external or wants_images(question) or wants_nearby(question) or is_route_request(question) or (wants_detail(question) and not hits):
         official_record = await find_official_entity(resolved_question, focus_entities)
 
     # OpenAI API 沒額度時仍要能搜尋 data.md 外的名詞：
@@ -3535,7 +3649,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "16.0.0",
+            "app_version": "17.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),

@@ -1108,6 +1108,7 @@
         function isHeadingLine(line) {
             const plain = line.replace(/^[#\s]+/, "").trim();
             if (!plain) return false;
+            if (/^#{1,4}\s+/.test(line)) return true;
             if (plain.length <= 18 && /[：:]$/.test(plain)) return true;
             return /^[\u{1F300}-\u{1FAFF}][^\n]{0,26}$/u.test(plain);
         }
@@ -1146,7 +1147,7 @@
                 if (isHeadingLine(line)) {
                     const heading = document.createElement("div");
                     heading.className = "rich-heading";
-                    appendStyledInline(heading, line.replace(/[：:]$/, ""));
+                    appendStyledInline(heading, line.replace(/^#{1,4}\s*/, "").replace(/[：:]$/, ""));
                     container.appendChild(heading);
                     return;
                 }
