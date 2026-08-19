@@ -92,6 +92,41 @@ class RagRetrievalTests(unittest.TestCase):
         self.assertIn("建議遊覽路線", titles)
         self.assertNotIn("大溪木藝", titles)
 
+    def test_detailed_local_answer_uses_official_record(self) -> None:
+        resolved, focus = app.resolve_question("詳細介紹福仁宮", [], [])
+        hits = app.retrieve(resolved, focus_entities=focus)
+        record = {
+            "name": "福仁宮",
+            "description": "官方詳細描述測試",
+            "address": "桃園市大溪區和平路100號",
+            "open_time": "04:00~20:30",
+            "tel": "03-3871235",
+            "pictures": [],
+        }
+        answer = app.local_rag_answer("詳細介紹福仁宮", hits[:1], record)
+        self.assertIn("官方詳細描述測試", answer)
+        self.assertIn("和平路100號", answer)
+
+    def test_official_image_result_parser(self) -> None:
+        class FakeResponse:
+            def model_dump(self):
+                return {
+                    "output": [{
+                        "type": "web_search_call",
+                        "results": [{
+                            "type": "image_result",
+                            "image_url": "https://cdn.example/furen.jpg",
+                            "thumbnail_url": "https://cdn.example/furen-thumb.jpg",
+                            "source_website_url": "https://travel.tycg.gov.tw/zh-tw/travel/attraction/1172",
+                            "caption": "福仁宮",
+                        }],
+                    }]
+                }
+
+        images = app.extract_web_images(FakeResponse())
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["caption"], "福仁宮")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

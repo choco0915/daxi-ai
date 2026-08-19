@@ -136,3 +136,11 @@ Render 啟動指令：
 ```text
 uvicorn app:app --host 0.0.0.0 --port $PORT
 ```
+
+
+## V5：詳細介紹與官方照片
+
+- 當使用者輸入「詳細介紹／深入介紹」時，系統會優先讀取桃園觀光導覽網官方 Open Data 補充同一景點的詳細資料。
+- 當使用者輸入「照片／圖片」時，會優先從官方 Open Data 取得景點圖片；若 OpenAI web search 可用，也會使用官方網域的 image search 結果。
+- 官方 Open Data 路徑不依賴 OpenAI，因此即使 OpenAI 暫時失敗，只要 Render 可連上桃園觀光官方資料，仍可顯示較完整的景點介紹與官方圖片。
+- 中央聊天區背景已改成透明，讓動態光影背景直接顯示；聊天頭像也稍微放大。
