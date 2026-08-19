@@ -371,6 +371,45 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("月光餅", results[0]["title"])
 
 
+    def test_public_result_rejects_irrelevant_foreign_page(self) -> None:
+        item = {
+            "title": "C7DC - Challenge des 7 défis capitaux",
+            "url": "https://example.fr/challenge",
+            "domain": "example.fr",
+            "snippet": "La version 2025 du challenge...",
+        }
+        self.assertFalse(app._public_result_is_relevant(item, "大溪有哪些必吃美食？", allow_general=True))
+
+    def test_public_result_rejects_mars_for_mooncake(self) -> None:
+        item = {
+            "title": "Mars - Wikipedia",
+            "url": "https://en.wikipedia.org/wiki/Mars",
+            "domain": "en.wikipedia.org",
+            "snippet": "Mars formed along with the other planets...",
+        }
+        self.assertFalse(app._public_result_is_relevant(item, "月光餅", allow_general=True))
+
+    def test_public_result_accepts_official_mooncake(self) -> None:
+        item = {
+            "title": "陳媽媽月光餅 - 桃園觀光導覽網",
+            "url": "https://travel.tycg.gov.tw/zh-tw/consume/detail/1947",
+            "domain": "travel.tycg.gov.tw",
+            "snippet": "桃園市大溪區和平路87號，招牌菜月光餅。",
+        }
+        self.assertTrue(app._public_result_is_relevant(
+            item, "月光餅", expected_domains=("travel.tycg.gov.tw",)
+        ))
+
+    def test_broad_food_question_stays_in_kb(self) -> None:
+        hits = app.retrieve("大溪有哪些必吃美食？")
+        self.assertTrue(hits)
+        self.assertFalse(app.should_discover_external("大溪有哪些必吃美食？", hits, []))
+
+    def test_specific_mooncake_still_discovers_external(self) -> None:
+        hits = app.retrieve("月光餅")
+        self.assertTrue(hits)
+        self.assertTrue(app.should_discover_external("月光餅", hits, []))
+
 
 
 if __name__ == "__main__":

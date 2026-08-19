@@ -202,6 +202,18 @@ WEB_MARKERS = (
 DETAIL_MARKERS = ("詳細", "深入", "完整介紹", "仔細介紹", "多介紹", "進一步", "更多資訊")
 IMAGE_MARKERS = ("照片", "圖片", "相片", "實景", "外觀照片", "看看照片", "看照片")
 
+# 這些是 data.md 已經有完整內容的「廣泛類別問題」。
+# 對這類問題不應因為標題沒有逐字命中，就跑去一般搜尋引擎湊答案。
+# 例如「大溪有哪些必吃美食？」應直接由既有美食章節回答；
+# 只有「月光餅」「某店家名」這類較具體、data.md 無專章的實體才外搜。
+BROAD_KB_INTENT_MARKERS = (
+    "美食", "必吃", "吃什麼", "好吃", "小吃", "伴手禮",
+    "景點", "去哪", "遊覽", "行程", "半日", "一日遊", "兩天一夜",
+    "交通", "停車", "公車", "客運", "開車",
+    "歷史", "建築", "巴洛克", "木藝", "六二四", "六月二十四",
+    "雨天", "下雨", "無障礙",
+)
+
 SYSTEM_INSTRUCTIONS = """你是「豆干弟」，一位親切、自然、熟悉大溪在地文化的 AI 導覽員。
 
 【最重要：回答焦點】
@@ -1582,6 +1594,51 @@ def _query_term_match(text: str, query: str) -> bool:
     return bool(q_tokens and len(q_tokens & t_tokens) >= max(1, min(2, len(q_tokens))))
 
 
+def _host_matches_domains(host: str, domains: tuple[str, ...] | list[str] | None) -> bool:
+    if not domains:
+        return True
+    host = (host or "").lower().replace("www.", "")
+    return any(host == domain or host.endswith("." + domain) for domain in domains)
+
+
+def _has_daxi_taoyuan_context(text: str) -> bool:
+    n = normalize_text(text)
+    return any(token in n for token in ("大溪", "桃園", "大漢溪", "大嵙崁"))
+
+
+def _public_result_is_relevant(
+    item: dict[str, str],
+    query: str,
+    *,
+    expected_domains: tuple[str, ...] | list[str] | None = None,
+    allow_general: bool = False,
+) -> bool:
+    """搜尋引擎結果的最後一道相關性閘門。
+
+    搜尋引擎可能忽略 site:、語言或把查詢自動改寫。V12 沒有在加入結果前
+    再驗證，因此「大溪美食」曾混入法文划船頁，「月光餅」甚至混入 Mars。
+    V13 必須同時驗證：網域、查詢詞、以及（一般網頁時）大溪／桃園脈絡。
+    """
+    url = str(item.get("url") or "")
+    host = (item.get("domain") or urlparse(url).netloc).lower().replace("www.", "")
+    if not _host_matches_domains(host, expected_domains):
+        return False
+
+    combined = " ".join([
+        str(item.get("title") or ""),
+        str(item.get("snippet") or ""),
+        unquote(url),
+    ])
+    if not _query_term_match(combined, query):
+        return False
+
+    # 官方桃園／觀光網域本身已經提供地理脈絡；一般網站則還必須明確提到大溪或桃園。
+    official_local = _host_matches_domains(host, ("travel.tycg.gov.tw", "tycg.gov.tw", "taiwan.net.tw"))
+    if official_local:
+        return True
+    return allow_general and _has_daxi_taoyuan_context(combined)
+
+
 def _extract_official_search_links(html: str, base_url: str, query: str) -> list[dict[str, str]]:
     decoded = unescape((html or "").replace("\\/", "/"))
     results: list[dict[str, str]] = []
@@ -1752,13 +1809,13 @@ def _extract_ddg_results(html: str, limit: int = 5) -> list[dict[str, str]]:
 
 
 async def public_web_search(query: str, limit: int = 5) -> list[dict[str, str]]:
-    """無需 OpenAI 額度的外部搜尋備援。
+    """無需 OpenAI 額度的外部搜尋備援（V13 嚴格相關性版）。
 
-    順序：桃園觀光站內搜尋 → Bing HTML → DuckDuckGo HTML。
-    搜尋結果仍會把政府／官方網域排在前面；任何 provider 失敗都不影響其他 provider。
+    先找桃園官方來源，再找其他官方來源；只有官方真的沒有結果，才允許一般網路，
+    且一般結果必須同時命中查詢詞與「大溪／桃園」脈絡。
     """
     global _last_public_search_error
-    key = normalize_text(query)
+    key = "v13:" + normalize_text(query)
     cached = _public_search_cache.get(key)
     if cached and time.time() - cached[0] < OFFICIAL_CACHE_SECONDS:
         return cached[1][:limit]
@@ -1767,12 +1824,14 @@ async def public_web_search(query: str, limit: int = 5) -> list[dict[str, str]]:
     if not clean_query:
         return []
 
-    search_queries = [
-        f'site:travel.tycg.gov.tw 大溪 "{clean_query}"',
-        f'site:tycg.gov.tw 大溪 "{clean_query}"',
-        f'site:taiwan.net.tw 大溪 "{clean_query}"',
-        f'大溪 "{clean_query}"',
+    # 每個 site: 查詢都綁定它應該回傳的網域；搜尋引擎若忽略 site: 就直接丟棄。
+    official_queries: list[tuple[str, tuple[str, ...]]] = [
+        (f'site:travel.tycg.gov.tw 大溪 "{clean_query}"', ("travel.tycg.gov.tw",)),
+        (f'site:tycg.gov.tw 大溪 "{clean_query}"', ("tycg.gov.tw",)),
+        (f'site:taiwan.net.tw 大溪 "{clean_query}"', ("taiwan.net.tw",)),
     ]
+    general_query = f'大溪 桃園 "{clean_query}"'
+
     results: list[dict[str, str]] = []
     seen: set[str] = set()
     errors: list[str] = []
@@ -1782,62 +1841,101 @@ async def public_web_search(query: str, limit: int = 5) -> list[dict[str, str]]:
         "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.7",
     }
 
-    def add(items: list[dict[str, str]]) -> None:
+    def add(
+        items: list[dict[str, str]],
+        *,
+        expected_domains: tuple[str, ...] | None = None,
+        allow_general: bool = False,
+    ) -> None:
         for item in items:
-            url = item.get("url", "")
+            url = str(item.get("url") or "")
             if not url or url in seen:
+                continue
+            if not _public_result_is_relevant(
+                item, clean_query, expected_domains=expected_domains, allow_general=allow_general
+            ):
                 continue
             seen.add(url)
             results.append(item)
             if len(results) >= limit:
                 break
 
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+    async def search_one(
+        client: httpx.AsyncClient,
+        search_query: str,
+        *,
+        expected_domains: tuple[str, ...] | None = None,
+        allow_general: bool = False,
+    ) -> None:
+        if len(results) >= limit:
+            return
         try:
-            add(await _official_fulltext_search(client, clean_query, limit=limit))
+            response = await client.get(
+                "https://www.bing.com/search",
+                params={"q": search_query, "format": "rss", "setlang": "zh-hant"},
+            )
+            if response.status_code < 400:
+                add(
+                    _extract_bing_rss_results(response.text, limit=max(limit * 3, 12)),
+                    expected_domains=expected_domains,
+                    allow_general=allow_general,
+                )
+        except Exception as exc:
+            errors.append(f"bing-rss: {type(exc).__name__}: {sanitize_error(exc)}")
+
+        if len(results) >= limit:
+            return
+        try:
+            response = await client.get(
+                "https://www.bing.com/search", params={"q": search_query, "setlang": "zh-hant"}
+            )
+            if response.status_code < 400:
+                add(
+                    _extract_bing_results(response.text, limit=max(limit * 3, 12)),
+                    expected_domains=expected_domains,
+                    allow_general=allow_general,
+                )
+        except Exception as exc:
+            errors.append(f"bing-html: {type(exc).__name__}: {sanitize_error(exc)}")
+
+        if len(results) >= limit:
+            return
+        try:
+            response = await client.get("https://html.duckduckgo.com/html/", params={"q": search_query})
+            if response.status_code < 400:
+                add(
+                    _extract_ddg_results(response.text, limit=max(limit * 3, 12)),
+                    expected_domains=expected_domains,
+                    allow_general=allow_general,
+                )
+        except Exception as exc:
+            errors.append(f"ddg: {type(exc).__name__}: {sanitize_error(exc)}")
+
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        # 0) 桃園觀光自身頁面。
+        try:
+            add(
+                await _official_fulltext_search(client, clean_query, limit=limit),
+                expected_domains=("travel.tycg.gov.tw",),
+            )
         except Exception as exc:
             errors.append(f"official-search: {type(exc).__name__}: {sanitize_error(exc)}")
 
-        for search_query in search_queries:
+        # 1) 三組官方 site: 搜尋；結果必須真的來自指定網域。
+        for search_query, domains in official_queries:
             if len(results) >= limit:
                 break
-            # Bing RSS fallback：XML 結構比搜尋頁 HTML 穩定，先嘗試 RSS。
-            try:
-                response = await client.get(
-                    "https://www.bing.com/search",
-                    params={"q": search_query, "format": "rss", "setlang": "zh-hant"},
-                )
-                if response.status_code < 400:
-                    add(_extract_bing_rss_results(response.text, limit=limit-len(results)))
-            except Exception as exc:
-                errors.append(f"bing-rss: {type(exc).__name__}: {sanitize_error(exc)}")
+            await search_one(client, search_query, expected_domains=domains, allow_general=False)
 
-            if len(results) >= limit:
-                break
-            # Bing HTML fallback
-            try:
-                response = await client.get("https://www.bing.com/search", params={"q": search_query, "setlang": "zh-hant"})
-                if response.status_code < 400:
-                    add(_extract_bing_results(response.text, limit=limit-len(results)))
-            except Exception as exc:
-                errors.append(f"bing-html: {type(exc).__name__}: {sanitize_error(exc)}")
-
-            if len(results) >= limit:
-                break
-            # DuckDuckGo fallback
-            try:
-                response = await client.get("https://html.duckduckgo.com/html/", params={"q": search_query})
-                if response.status_code < 400:
-                    add(_extract_ddg_results(response.text, limit=limit-len(results)))
-            except Exception as exc:
-                errors.append(f"ddg: {type(exc).__name__}: {sanitize_error(exc)}")
+        # 2) 官方來源仍不足時才搜尋一般網路，而且要求「查詢詞 + 大溪／桃園」同時成立。
+        if len(results) < limit:
+            await search_one(client, general_query, expected_domains=None, allow_general=True)
 
     def official_rank(item: dict[str, str]) -> tuple[int, int]:
-        host = item.get("domain", "").lower()
-        official = any(host == d or host.endswith("." + d) for d in OFFICIAL_WEB_DOMAINS)
-        # 桃園觀光本身最高，其他官方其次，一般網路最後。
+        host = item.get("domain", "").lower().replace("www.", "")
         if host == "travel.tycg.gov.tw":
             return (0, 0)
+        official = any(host == d or host.endswith("." + d) for d in OFFICIAL_WEB_DOMAINS)
         return (1 if official else 2, 0)
 
     results.sort(key=official_rank)
@@ -2453,22 +2551,41 @@ def has_direct_kb_topic(question: str, hits: list[dict[str, Any]]) -> bool:
 
 
 def should_discover_external(question: str, hits: list[dict[str, Any]], focus_entities: list[str] | None = None) -> bool:
-    """data.md 沒有獨立主題時，允許豆干弟往官方資料／公開網路擴充。
+    """只對「具體但 data.md 沒有專章的名詞」做外部搜尋。
 
-    這解決「AI 前面推薦了月光餅，但 data.md 沒有月光餅專章，所以追問時搜尋不到」的問題。
+    V13 的重要修正：
+    - 廣泛問題（例如「大溪有哪些必吃美食？」）如果 data.md 已有高相關內容，
+      不再因為章節標題沒有逐字等於問句就啟動一般搜尋引擎。
+    - 具體實體（例如「月光餅」「陳媽媽月光餅」「某新景點」）仍可外搜。
     """
     if not WEB_SEARCH_ENABLED:
         return False
     if not hits:
         return True
+
+    clean_text = re.sub(r"[|｜].*$", "", question).strip()
+    clean = normalize_text(clean_text)
+
+    # 使用者明確要求查網路／官網時仍允許外搜。
+    if explicit_web_request(clean_text):
+        return True
+
+    # 已解析出前文實體，但它不是 data.md 既有標題：允許外搜延伸。
     if focus_entities and all(not extract_known_titles(entity) for entity in focus_entities):
         return True
-    if not has_direct_kb_topic(question, hits):
-        # 短名詞、店家名、食品名最需要外部實體搜尋；較長的一般問題則交由既有 RAG。
-        clean = normalize_text(re.sub(r"[|｜].*$", "", question))
-        if 2 <= len(clean) <= 28:
-            return True
-    return False
+
+    # data.md 已有直接主題就不需要外搜。
+    if has_direct_kb_topic(question, hits):
+        return False
+
+    # 廣泛類別問題已有可信 RAG 時，留在 data.md；不要把搜尋引擎的雜訊混進來。
+    if any(normalize_text(marker) in clean for marker in BROAD_KB_INTENT_MARKERS):
+        top_score = float(hits[0].get("score") or 0.0)
+        if top_score >= 0.12:
+            return False
+
+    # 具體短名詞／店家名／食品名才進入外部實體搜尋。
+    return 2 <= len(clean) <= 28
 
 
 def web_tool_config(include_images: bool = False, detailed: bool = False) -> dict[str, Any]:
@@ -2712,7 +2829,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="12.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="13.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -2797,7 +2914,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "12.0.0",
+        "app_version": "13.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -2830,7 +2947,7 @@ async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) ->
     record = await find_official_entity(name, [name])
     public_results = [] if record else await public_web_search(name, limit=5)
     return {
-        "app_version": "12.0.0",
+        "app_version": "13.0.0",
         "query": name,
         "direct_kb_topic": has_direct_kb_topic(name, hits),
         "kb_titles": [hit.get("title") for hit in hits],
@@ -2863,7 +2980,7 @@ async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) ->
             matched_gallery = gallery_url
             break
     return {
-        "app_version": "12.0.0",
+        "app_version": "13.0.0",
         "query": name,
         "official_record": {
             "name": record.get("name"),
@@ -3100,7 +3217,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "12.0.0",
+            "app_version": "13.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),
