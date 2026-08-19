@@ -226,6 +226,7 @@ class ChatRequest(BaseModel):
     history: list[HistoryTurn] = Field(default_factory=list)
     last_recommendations: list[str] = Field(default_factory=list)
     active_topics: list[str] = Field(default_factory=list)
+    conversation_id: str = Field(default="", max_length=160)
 
 
 kb_data: list[dict[str, Any]] = []
@@ -243,6 +244,9 @@ _last_openai_error: str = ""
 _last_openai_model_used: str = ""
 _last_official_error: str = ""
 _last_image_error: str = ""
+_openai_quota_blocked_until: float = 0.0
+SERVER_STATE_TTL_SECONDS = 4 * 60 * 60
+_conversation_states: dict[str, dict[str, Any]] = {}
 
 
 def normalize_text(text: str) -> str:
@@ -257,6 +261,59 @@ def sanitize_error(exc: Exception | str) -> str:
     message = re.sub(r"sk-[A-Za-z0-9_-]+", "[REDACTED_KEY]", message)
     message = re.sub(r"Bearer\s+[A-Za-z0-9._-]+", "Bearer [REDACTED]", message, flags=re.I)
     return message[:500]
+
+
+def is_quota_error(exc: Exception | str) -> bool:
+    text = str(exc).lower()
+    return (
+        "insufficient_quota" in text
+        or "exceeded your current quota" in text
+        or ("error code: 429" in text and "quota" in text)
+    )
+
+
+def _clean_conversation_id(value: str) -> str:
+    value = re.sub(r"[^0-9A-Za-z._:-]", "", value or "")
+    return value[:160]
+
+
+def _prune_conversation_states() -> None:
+    now = time.time()
+    stale = [
+        key for key, state in _conversation_states.items()
+        if now - float(state.get("updated_at", 0.0)) > SERVER_STATE_TTL_SECONDS
+    ]
+    for key in stale:
+        _conversation_states.pop(key, None)
+
+
+def get_server_conversation_state(conversation_id: str) -> dict[str, Any]:
+    conversation_id = _clean_conversation_id(conversation_id)
+    if not conversation_id:
+        return {}
+    _prune_conversation_states()
+    state = _conversation_states.get(conversation_id)
+    return dict(state) if state else {}
+
+
+def save_server_conversation_state(
+    conversation_id: str,
+    *,
+    active_topics: list[str],
+    recommendations: list[str],
+    last_question: str,
+    last_answer: str,
+) -> None:
+    conversation_id = _clean_conversation_id(conversation_id)
+    if not conversation_id:
+        return
+    _conversation_states[conversation_id] = {
+        "active_topics": [str(v) for v in active_topics if v][:5],
+        "recommendations": [str(v) for v in recommendations if v][:8],
+        "last_question": str(last_question or "")[:500],
+        "last_answer": str(last_answer or "")[:2500],
+        "updated_at": time.time(),
+    }
 
 
 def tokenize(text: str) -> list[str]:
@@ -1152,7 +1209,7 @@ async def load_official_albums() -> list[dict[str, Any]]:
         return _official_album_cache
 
     timeout = httpx.Timeout(12.0, connect=6.0)
-    headers = {"User-Agent": "Daxi-AI-Guide/7.0"}
+    headers = {"User-Agent": "Daxi-AI-Guide/8.0"}
     root: ET.Element | None = None
     used_url = ""
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -1169,6 +1226,9 @@ async def load_official_albums() -> list[dict[str, Any]]:
                 continue
 
     if root is None:
+        global _last_image_error
+        if not _last_image_error:
+            _last_image_error = "桃園觀光相簿 Open Data 端點未回傳可解析 XML；系統將改用官方景點頁／相簿頁抓圖"
         return _official_album_cache
 
     records: list[dict[str, Any]] = []
@@ -1297,7 +1357,7 @@ async def scrape_official_page_images(record: dict[str, Any] | None) -> list[dic
 
     timeout = httpx.Timeout(14.0, connect=6.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/7.0; +https://travel.tycg.gov.tw/)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/8.0; +https://travel.tycg.gov.tw/)",
         "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
         "Accept": "text/html,application/xhtml+xml",
     }
@@ -1363,10 +1423,15 @@ async def get_official_images(
     focus_entities: list[str] | None = None,
 ) -> list[dict[str, str]]:
     """依可靠度合併：景點資料內圖片 → 官方相簿 → 官方景點頁。"""
+    # 先讀景點資料本身，再直接抓官方景點頁／已知官方相簿頁。
+    # 桃園「觀光相簿」Open Data 端點在部分環境會回空，因此把它降為最後備援，
+    # 避免相簿 API 失效時阻斷照片顯示。
+    page_images = await scrape_official_page_images(record)
+    album_images = await find_album_images(query, focus_entities) if len(page_images) < 2 else []
     sources = [
         *official_images_from_record(record),
-        *(await find_album_images(query, focus_entities)),
-        *(await scrape_official_page_images(record)),
+        *page_images,
+        *album_images,
     ]
     combined: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -1525,9 +1590,12 @@ async def openai_rag_answer(
     nearby_records: list[dict[str, Any]] | None = None,
     route_records: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
+    global _openai_quota_blocked_until
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not HAS_OPENAI or not api_key:
         raise RuntimeError("OpenAI SDK 或 OPENAI_API_KEY 未設定")
+    if time.time() < _openai_quota_blocked_until:
+        raise RuntimeError("OpenAI API 目前為 insufficient_quota，暫時停用模型呼叫並使用本地／官方資料模式")
 
     client = AsyncOpenAI(api_key=api_key)
     context = build_context(hits) if hits else "（data.md 本輪沒有足夠的高相關片段）"
@@ -1603,6 +1671,10 @@ async def openai_rag_answer(
             break
         except Exception as exc:
             model_errors.append(f"{candidate_model}: {type(exc).__name__}: {sanitize_error(exc)}")
+            if is_quota_error(exc):
+                # 配額不足和模型名稱無關；再試 fallback 模型只會再吃一次失敗請求。
+                _openai_quota_blocked_until = time.time() + 300
+                break
 
     if response is None:
         raise RuntimeError(" | ".join(model_errors) or "OpenAI 所有模型候選都失敗")
@@ -1646,7 +1718,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="7.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="8.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -1701,7 +1773,7 @@ async def image_proxy(url: str = Query(min_length=8, max_length=3000)) -> Respon
     try:
         timeout = httpx.Timeout(15.0, connect=6.0)
         headers = {
-            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/7.0",
+            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/8.0",
             "Referer": "https://travel.tycg.gov.tw/",
         }
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -1731,7 +1803,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "7.0.0",
+        "app_version": "8.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -1743,6 +1815,13 @@ def diagnostics() -> dict[str, Any]:
         "official_attractions_cached": len(_official_attractions_cache),
         "official_albums_cached": len(_official_album_cache),
         "trusted_images_cached": len(_trusted_image_urls),
+        "openai_quota_blocked": time.time() < _openai_quota_blocked_until,
+        "server_conversations_cached": len(_conversation_states),
+        "note": (
+            "OpenAI API 配額不足；AI/Web Search 會暫停，網站改用 data.md + 桃園官方資料。"
+            if "quota" in (_last_openai_error or "").lower()
+            else None
+        ),
     }
 
 
@@ -1754,11 +1833,21 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
     question = payload.question.strip()
     history = payload.history[-MAX_HISTORY_TURNS:]
 
+    # V8：除了瀏覽器 localStorage，再由後端依 conversation_id 保存目前主題與推薦。
+    # 即使前端因重新整理／舊快取漏傳 active_topics，「照片、再詳細一點、那附近呢」仍可接續。
+    server_state = get_server_conversation_state(payload.conversation_id)
+    effective_active_topics = [topic for topic in payload.active_topics if topic]
+    if not effective_active_topics:
+        effective_active_topics = [str(v) for v in server_state.get("active_topics", []) if v]
+    effective_recommendations = [rec for rec in payload.last_recommendations if rec]
+    if not effective_recommendations:
+        effective_recommendations = [str(v) for v in server_state.get("recommendations", []) if v]
+
     resolved_question, focus_entities = resolve_question(
         question,
         history,
-        payload.last_recommendations,
-        payload.active_topics,
+        effective_recommendations,
+        effective_active_topics,
     )
     hits = retrieve(resolved_question, focus_entities=focus_entities)
     use_web = should_use_web(question, hits, resolved_question)
@@ -1775,7 +1864,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
 
     route_records: list[dict[str, Any]] = []
     if is_route_request(question):
-        route_entities = focus_entities or recent_recommendation_entities(history, payload.last_recommendations)
+        route_entities = focus_entities or recent_recommendation_entities(history, effective_recommendations)
         if route_entities:
             route_records = order_records_by_nearest(await find_official_records_for_entities(route_entities))
 
@@ -1898,7 +1987,15 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
     elif hits:
         active_topics = [hits[0]["title"]]
     else:
-        active_topics = [topic for topic in payload.active_topics if topic][:5]
+        active_topics = [topic for topic in effective_active_topics if topic][:5]
+
+    save_server_conversation_state(
+        payload.conversation_id,
+        active_topics=active_topics,
+        recommendations=recommendations,
+        last_question=question,
+        last_answer=answer,
+    )
 
     return {
         "answer": answer,
@@ -1911,7 +2008,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "7.0.0",
+            "app_version": "8.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),
