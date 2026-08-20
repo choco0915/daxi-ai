@@ -109,24 +109,24 @@ QUERY_EXPANSIONS: dict[str, str] = {
     "美食": "大溪必吃美食總覽 豆干 豆花 碗粿 湯圓 月光餅 花生糖 豬腳 油飯",
     "景點": "大溪老街 中正公園 大溪橋 武德殿 大溪公會堂 大溪木藝生態博物館 鳳飛飛故事館",
     "去哪": "景點 大溪老街 中正公園 大溪橋 木藝生態博物館",
-    "停車": "交通 停車 月眉停車場 大溪橋頭停車場 停二停車場",
-    "開車": "交通 停車 自行開車 大溪交流道 員林路 介壽路",
-    "公車": "交通 大眾運輸 桃園客運 台灣好行 大溪客運總站 大溪老街站",
-    "客運": "交通 大眾運輸 桃園客運 台灣好行",
-    "怎麼去": "交通 大眾運輸 自行開車",
-    "交通": "交通 停車 大眾運輸 自行開車",
-    "半日": "建議遊覽路線 半日遊 大溪老街 普濟堂 中正公園 大溪橋",
-    "一日遊": "建議遊覽路線 歷史文化一日遊 大溪老街 木藝生態博物館 大溪橋",
-    "兩天一夜": "建議遊覽路線 兩天一夜",
-    "行程": "建議遊覽路線 半日遊 一日遊 兩天一夜",
+    "停車": "大溪停車 月眉停車場 大溪橋頭停車場 停二停車場",
+    "開車": "大溪交通 大溪停車 自行開車",
+    "公車": "大溪公車 大溪交通 大眾運輸",
+    "客運": "大溪公車 大溪交通 大眾運輸",
+    "怎麼去": "大溪交通 大眾運輸 自行開車 停車",
+    "交通": "大溪交通 大溪停車 大溪公車 大眾運輸 自行開車",
+    "半日": "大溪半日遊 建議遊覽路線 大溪老街 普濟堂 中正公園 大溪橋",
+    "一日遊": "大溪一日遊 建議遊覽路線 大溪老街 大溪木藝生態博物館 大溪橋",
+    "兩天一夜": "大溪兩天一夜 建議遊覽路線",
+    "行程": "建議遊覽路線 大溪半日遊 大溪一日遊 大溪兩天一夜",
     "木藝": "大溪木藝 大溪木藝生態博物館 榫接 雕刻 家具",
     "木器": "大溪木藝 大溪木藝生態博物館 木器 家具 榫接 雕刻",
     "神將": "六二四 大溪社頭文化 普濟堂 大仙尪",
     "帽子歌后": "鳳飛飛 鳳飛飛故事館",
     "鳳飛飛": "鳳飛飛 鳳飛飛故事館 祝你幸福 心肝寶貝 掌聲響起",
-    "雨天": "無障礙與天候建議 室內場館 武德殿 公會堂 鳳飛飛故事館",
-    "下雨": "無障礙與天候建議 室內場館 武德殿 公會堂 鳳飛飛故事館",
-    "無障礙": "無障礙與天候建議 老街騎樓 中正公園 木藝博物館",
+    "雨天": "大溪雨天旅遊 室內場館 武德殿 公會堂 鳳飛飛故事館",
+    "下雨": "大溪雨天旅遊 室內場館 武德殿 公會堂 鳳飛飛故事館",
+    "無障礙": "大溪無障礙旅遊 老街騎樓 中正公園 木藝博物館",
 }
 
 INTENT_TITLE_BOOSTS: dict[str, list[str]] = {
@@ -139,18 +139,18 @@ INTENT_TITLE_BOOSTS: dict[str, list[str]] = {
     "吃什麼": ["大溪必吃美食總覽"],
     "好吃": ["大溪必吃美食總覽"],
     "美食": ["大溪必吃美食總覽"],
-    "停車": ["交通、停車與實用注意事項"],
-    "開車": ["交通、停車與實用注意事項"],
-    "公車": ["交通、停車與實用注意事項"],
-    "客運": ["交通、停車與實用注意事項"],
-    "交通": ["交通、停車與實用注意事項"],
-    "雨天": ["交通、停車與實用注意事項"],
-    "下雨": ["交通、停車與實用注意事項"],
-    "無障礙": ["交通、停車與實用注意事項"],
-    "半日": ["建議遊覽路線"],
-    "一日遊": ["建議遊覽路線"],
-    "兩天一夜": ["建議遊覽路線"],
-    "行程": ["建議遊覽路線"],
+    "停車": ["大溪停車", "大溪交通"],
+    "開車": ["大溪交通", "大溪停車"],
+    "公車": ["大溪公車", "大溪交通"],
+    "客運": ["大溪公車", "大溪交通"],
+    "交通": ["大溪交通", "大溪停車", "大溪公車"],
+    "雨天": ["大溪雨天旅遊"],
+    "下雨": ["大溪雨天旅遊"],
+    "無障礙": ["大溪無障礙旅遊"],
+    "半日": ["大溪半日遊", "建議遊覽路線"],
+    "一日遊": ["大溪一日遊", "建議遊覽路線"],
+    "兩天一夜": ["大溪兩天一夜", "建議遊覽路線"],
+    "行程": ["建議遊覽路線", "大溪半日遊", "大溪一日遊", "大溪兩天一夜"],
     "大禧": ["六二四（大溪六月二十四）"],
     "六月二十四": ["六二四（大溪六月二十四）"],
     "六月24": ["六二四（大溪六月二十四）"],
@@ -173,15 +173,33 @@ FOCUS_TITLE_GROUPS: dict[str, list[str]] = {
     "鳳飛飛": ["鳳飛飛", "鳳飛飛故事館"],
     "六月二十四": ["六二四（大溪六月二十四）", "大溪社頭文化", "普濟堂"],
     "六二四": ["六二四（大溪六月二十四）", "大溪社頭文化", "普濟堂"],
-    "停車": ["交通、停車與實用注意事項"],
-    "開車": ["交通、停車與實用注意事項"],
-    "公車": ["交通、停車與實用注意事項"],
-    "客運": ["交通、停車與實用注意事項"],
-    "交通": ["交通、停車與實用注意事項"],
-    "雨天": ["交通、停車與實用注意事項"],
-    "下雨": ["交通、停車與實用注意事項"],
-    "無障礙": ["交通、停車與實用注意事項"],
+    "停車": ["大溪停車", "大溪交通"],
+    "開車": ["大溪交通", "大溪停車"],
+    "公車": ["大溪公車", "大溪交通"],
+    "客運": ["大溪公車", "大溪交通"],
+    "交通": ["大溪交通", "大溪停車", "大溪公車"],
+    "雨天": ["大溪雨天旅遊"],
+    "下雨": ["大溪雨天旅遊"],
+    "無障礙": ["大溪無障礙旅遊"],
 }
+
+
+DIRECT_INTENT_TITLE_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("停車", "停哪", "車位", "停車場"), ("大溪停車",)),
+    (("公車", "客運", "巴士"), ("大溪公車",)),
+    (("無障礙", "輪椅", "行動不便"), ("大溪無障礙旅遊",)),
+    (("雨天", "下雨", "雨備"), ("大溪雨天旅遊",)),
+    (("兩天一夜", "兩日遊", "兩天"), ("大溪兩天一夜",)),
+    (("半日遊", "半日", "半天"), ("大溪半日遊",)),
+    (("一日遊", "一日", "一天"), ("大溪一日遊",)),
+    (("交通", "怎麼去", "如何去", "前往", "開車"), ("大溪交通",)),
+)
+
+PRACTICAL_KB_TITLES = {
+    "大溪交通", "大溪停車", "大溪公車", "大溪雨天旅遊", "大溪無障礙旅遊",
+    "大溪親子景點", "大溪夕陽與攝影", "大溪旅遊注意事項",
+}
+ROUTE_TEMPLATE_TITLES = {"建議遊覽路線", "大溪半日遊", "大溪一日遊", "大溪兩天一夜"}
 
 STOPWORDS = {
     "請問", "可以", "想要", "想知道", "告訴", "介紹", "一下", "一下子",
@@ -254,6 +272,8 @@ SYSTEM_INSTRUCTIONS = """你是「豆干弟」，一位親切、自然、熟悉�
 15. 使用繁體中文與臺灣慣用語，以豆干弟導覽口吻自然回答。
 16. 可用 1～4 個小標題、少量 emoji、粗體或條列讓內容好讀，但避免過度花俏。
 17. 優先精準，再求完整。回答寧可少一點，也不要把低相關內容湊進來。
+18. 使用者直接問「交通、停車、公車、雨天、無障礙」時，這屬於實用資訊查詢：第一輪就直接把 data.md 中對應章節的可用資訊完整回答，不要只給一句摘要後叫使用者「再詳細一點」。
+19. 使用者直接要求「半日遊、一日遊、兩天一夜」且沒有指定前文多個景點時，優先使用 data.md 的對應行程模板完整排出多站路線；只有使用者說「把剛剛推薦的幾個／第二個和第三個排成路線」時，才依前文指定景點重新排序。
 """
 
 
@@ -508,6 +528,22 @@ def is_followup_question(question: str) -> bool:
     return any(normalize_text(marker) in q for marker in FOLLOWUP_MARKERS)
 
 
+def direct_intent_titles(question: str) -> list[str]:
+    """把交通、停車與制式旅遊時長直接導向專屬 data.md 章節。
+
+    這類問題不應先被「大溪老街」等泛用地名搶走焦點。
+    """
+    q = normalize_text(question)
+    for markers, titles in DIRECT_INTENT_TITLE_RULES:
+        if any(normalize_text(marker) in q for marker in markers):
+            return list(titles)
+    return []
+
+
+def is_practical_request(question: str) -> bool:
+    return any(title in PRACTICAL_KB_TITLES for title in direct_intent_titles(question))
+
+
 def extract_known_titles(text: str) -> list[str]:
     """找出文字裡直接提到的知識庫標題，優先保留較長實體名稱。
 
@@ -608,6 +644,13 @@ def resolve_question(
     """把「它、第二個、剛剛推薦的幾個」解析成可檢索的具體問題。"""
     question = question.strip()
     q_norm = normalize_text(question)
+
+    # V18：交通／停車／公車與「半日、一日、兩天一夜」先直接導向專屬章節。
+    # 但「把剛剛推薦的幾個排成半日行程」屬於多輪自訂路線，仍交給前文實體解析。
+    intent_titles = direct_intent_titles(question)
+    route_followup = is_route_request(question) and is_followup_question(question)
+    if intent_titles and not route_followup:
+        return question, intent_titles
 
     # 問句若帶有非常明確的意圖（巴洛克、停車、木藝等），意圖比地點背景詞更重要。
     # 例如「大溪老街的巴洛克」不能因為出現「大溪老街」就只鎖定老街總論。
@@ -898,6 +941,44 @@ def _focused_kb_mentions(question: str, hits: list[dict[str, Any]], limit: int =
     return mentions
 
 
+def _hit_by_title(hits: list[dict[str, Any]], titles: set[str]) -> dict[str, Any] | None:
+    for hit in hits:
+        if str(hit.get("title") or "") in titles:
+            return hit
+    for item in kb_data:
+        if str(item.get("title") or "") in titles:
+            return item
+    return None
+
+
+def _route_template_hit(question: str, hits: list[dict[str, Any]]) -> dict[str, Any] | None:
+    q = normalize_text(question)
+    preferred: list[str]
+    if any(k in q for k in (normalize_text("兩天一夜"), normalize_text("兩天"), normalize_text("兩日遊"))):
+        preferred = ["大溪兩天一夜"]
+    elif any(k in q for k in (normalize_text("半日"), normalize_text("半天"))):
+        preferred = ["大溪半日遊"]
+    elif any(k in q for k in (normalize_text("一日遊"), normalize_text("一天"), normalize_text("一日"))):
+        preferred = ["大溪一日遊"]
+    else:
+        preferred = ["建議遊覽路線"]
+    return _hit_by_title(hits, set(preferred))
+
+
+def _practical_kb_hit(question: str, hits: list[dict[str, Any]]) -> dict[str, Any] | None:
+    titles = set(direct_intent_titles(question)) & PRACTICAL_KB_TITLES
+    if not titles:
+        return None
+    return _hit_by_title(hits, titles)
+
+
+def _format_practical_kb_answer(hit: dict[str, Any]) -> str:
+    """交通、停車、公車等第一輪就完整回答，不再叫使用者追問詳細。"""
+    title = str(hit.get("title") or "大溪實用資訊")
+    body = clean_markdown_for_local(str(hit.get("text") or ""))
+    return f"🧭 **{title}**\n\n{body}".strip()
+
+
 def _direct_kb_hit(question: str, hits: list[dict[str, Any]]) -> dict[str, Any] | None:
     """找出最直接對應使用者主題的 data.md 獨立章節。
 
@@ -956,7 +1037,7 @@ def _format_kb_detail_answer(
         stripped = line.strip()
         if stripped.startswith("### "):
             section = stripped[4:].strip()
-            in_intro = section in {"介紹", "核心介紹", "人物介紹", "產業背景", "建築風格"}
+            in_intro = section in {"摘要", "介紹", "核心介紹", "人物介紹", "產業背景", "建築風格"}
             continue
         if in_intro and stripped and not stripped.startswith(("*", "-")):
             intro_lines.append(stripped)
@@ -1002,8 +1083,19 @@ def local_rag_answer(
     if wants_nearby(question) and nearby_records:
         return _format_nearby_answer(official_record, nearby_records)
 
-    if is_route_request(question) and route_records:
-        return _format_local_route_answer(route_records, question)
+    # V18：只有「把前面多個景點串起來」才使用動態 route_records；
+    # 直接問半日／一日／兩天一夜時，使用 data.md 的完整行程模板。
+    if is_route_request(question):
+        if route_records:
+            return _format_local_route_answer(route_records, question)
+        route_hit = _route_template_hit(question, hits)
+        if route_hit:
+            return f"🧭 **{route_hit['title']}**\n\n{clean_markdown_for_local(str(route_hit.get('text') or ''))}"
+
+    # 交通、停車、公車、雨天、無障礙屬實用資訊，第一輪就直接完整呈現。
+    practical_hit = _practical_kb_hit(question, hits)
+    if practical_hit:
+        return _format_practical_kb_answer(practical_hit)
 
     title = _record_title(official_record, hits[0]["title"] if hits else "景點")
 
@@ -2583,7 +2675,7 @@ async def load_official_albums() -> list[dict[str, Any]]:
         return _official_album_cache
 
     timeout = httpx.Timeout(12.0, connect=6.0)
-    headers = {"User-Agent": "Daxi-AI-Guide/10.0"}
+    headers = {"User-Agent": "Daxi-AI-Guide/18.0"}
     root: ET.Element | None = None
     used_url = ""
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -2719,7 +2811,7 @@ async def _verify_official_image_candidates(
     verified: list[str] = []
     timeout = httpx.Timeout(10.0, connect=5.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/10.0; +https://travel.tycg.gov.tw/)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/18.0; +https://travel.tycg.gov.tw/)",
         "Referer": source_page_url,
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
     }
@@ -2781,7 +2873,7 @@ async def scrape_official_page_images(record: dict[str, Any] | None) -> list[dic
 
     timeout = httpx.Timeout(14.0, connect=6.0)
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/10.0; +https://travel.tycg.gov.tw/)",
+        "User-Agent": "Mozilla/5.0 (compatible; Daxi-AI-Guide/18.0; +https://travel.tycg.gov.tw/)",
         "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
         "Accept": "text/html,application/xhtml+xml",
     }
@@ -2904,7 +2996,7 @@ def wants_nearby(question: str) -> bool:
 def explicit_web_request(question: str) -> bool:
     q = normalize_text(question)
     explicit = ("網路", "上網", "查網路", "官網", "官方", "最新", "現在", "目前", "今天", "近期")
-    return any(normalize_text(marker) in q for marker in explicit) or wants_detail(question) or wants_images(question)
+    return any(normalize_text(marker) in q for marker in explicit) or wants_images(question)
 
 
 def should_use_web(question: str, hits: list[dict[str, Any]], resolved_question: str) -> bool:
@@ -2922,6 +3014,14 @@ def should_use_web(question: str, hits: list[dict[str, Any]], resolved_question:
     if wants_detail(question) and hits:
         rich_hit = hits[0]
         if len(str(rich_hit.get("text") or "")) >= 180 and not any(
+            normalize_text(marker) in q for marker in freshness_markers
+        ):
+            return False
+
+    # V18：data.md 已有完整制式行程時，單純「幫我安排一日遊」不需要外網。
+    if is_route_request(resolved_question) and hits:
+        route_hit = _route_template_hit(resolved_question, hits)
+        if route_hit and len(str(route_hit.get("text") or "")) >= 180 and not any(
             normalize_text(marker) in q for marker in freshness_markers
         ):
             return False
@@ -3235,7 +3335,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="光影大溪 AI 導覽", version="17.0.0", lifespan=lifespan)
+app = FastAPI(title="光影大溪 AI 導覽", version="18.0.0", lifespan=lifespan)
 
 static_path = os.path.join(APP_DIR, "static")
 if os.path.isdir(static_path):
@@ -3264,6 +3364,7 @@ def health() -> dict[str, Any]:
     maybe_reload_kb()
     return {
         "status": "ok",
+        "app_version": "18.0.0",
         "knowledge_chunks": len(kb_data),
         "openai_enabled": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "web_search_enabled": WEB_SEARCH_ENABLED,
@@ -3290,7 +3391,7 @@ async def image_proxy(url: str = Query(min_length=8, max_length=3000)) -> Respon
     try:
         timeout = httpx.Timeout(15.0, connect=6.0)
         headers = {
-            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/10.0",
+            "User-Agent": "Mozilla/5.0 Daxi-AI-Guide/18.0",
             "Referer": "https://travel.tycg.gov.tw/",
         }
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -3320,7 +3421,7 @@ def diagnostics() -> dict[str, Any]:
     或圖片抓取最近一次在哪一層失敗，避免所有例外只留在 Render Logs。
     """
     return {
-        "app_version": "17.0.0",
+        "app_version": "18.0.0",
         "openai_configured": bool(HAS_OPENAI and os.getenv("OPENAI_API_KEY", "").strip()),
         "model": OPENAI_MODEL,
         "fallback_model": OPENAI_FALLBACK_MODEL or None,
@@ -3355,7 +3456,7 @@ async def diagnostics_search(name: str = Query(min_length=1, max_length=120)) ->
     record = await find_official_entity(name, [name])
     public_results = [] if record else await public_web_search(name, limit=5)
     return {
-        "app_version": "17.0.0",
+        "app_version": "18.0.0",
         "query": name,
         "direct_kb_topic": has_direct_kb_topic(name, hits),
         "kb_titles": [hit.get("title") for hit in hits],
@@ -3394,7 +3495,7 @@ async def diagnostics_images(name: str = Query(min_length=1, max_length=120)) ->
             matched_gallery = gallery_url
             break
     return {
-        "app_version": "17.0.0",
+        "app_version": "18.0.0",
         "query": name,
         "official_record": {
             "name": record.get("name"),
@@ -3439,9 +3540,15 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
     # V10：官方實體不再只有「景點」。桃園觀光的美食／消費 Open Data 也納入，
     # 所以「月光餅、某家豆花、某店家」即使 data.md 沒有獨立章節，也可以直接被搜尋與延續。
     official_record: dict[str, Any] | None = None
-    # V17：若 data.md 已有完整章節，單純「再詳細一點」不需要先連外。
-    # 只有查最新／地址時間（use_web）、外部新名詞、照片、附近或路線時才讀官方資料。
-    if use_web or discover_external or wants_images(question) or wants_nearby(question) or is_route_request(question) or (wants_detail(question) and not hits):
+    # V18：制式半日／一日／兩天一夜已在 data.md 有完整模板，不必為了「行程」本身連外。
+    # 只有自訂多景點路線、查最新／地址時間、外部新名詞、照片、附近時才讀官方資料。
+    generic_route_template = bool(
+        is_route_request(question)
+        and focus_entities
+        and all(entity in ROUTE_TEMPLATE_TITLES for entity in focus_entities)
+    )
+    route_needs_official = is_route_request(question) and not generic_route_template
+    if use_web or discover_external or wants_images(question) or wants_nearby(question) or route_needs_official or (wants_detail(question) and not hits):
         official_record = await find_official_entity(resolved_question, focus_entities)
 
     # OpenAI API 沒額度時仍要能搜尋 data.md 外的名詞：
@@ -3456,8 +3563,15 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
 
     route_records: list[dict[str, Any]] = []
     if is_route_request(question):
-        route_entities = focus_entities or recent_recommendation_entities(history, effective_recommendations)
-        if route_entities:
+        # 制式「大溪一日遊／半日遊」直接用 data.md 模板；
+        # 只有追問前文多個景點時才把指定實體交給座標排序。
+        if focus_entities and not all(entity in ROUTE_TEMPLATE_TITLES for entity in focus_entities):
+            route_entities = [entity for entity in focus_entities if entity not in ROUTE_TEMPLATE_TITLES]
+        elif is_followup_question(question):
+            route_entities = recent_recommendation_entities(history, effective_recommendations)
+        else:
+            route_entities = []
+        if len(route_entities) >= 2:
             route_records = order_records_by_nearest(await find_official_records_for_entities(route_entities))
 
     base_images: list[dict[str, str]] = []
@@ -3649,7 +3763,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         "active_topics": active_topics,
         "storymap_url": STORYMAP_URL,
         "debug": {
-            "app_version": "17.0.0",
+            "app_version": "18.0.0",
             "openai_fallback": openai_fallback,
             "image_count": len(images),
             "nearby_count": len(nearby_records),

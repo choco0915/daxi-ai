@@ -32,16 +32,16 @@ class RagRetrievalTests(unittest.TestCase):
         self.assert_top_contains("六月二十四是什麼活動？", "六二四（大溪六月二十四）", 1)
 
     def test_parking(self) -> None:
-        self.assert_top_contains("開車去大溪老街可以停哪裡？", "交通、停車與實用注意事項", 1)
+        self.assert_top_contains("開車去大溪老街可以停哪裡？", "大溪停車", 1)
 
     def test_fong_fei_fei(self) -> None:
         self.assert_top_contains("鳳飛飛有哪些代表歌曲？", "鳳飛飛", 1)
 
     def test_rainy_day(self) -> None:
-        self.assert_top_contains("下雨天可以去哪？", "交通、停車與實用注意事項", 1)
+        self.assert_top_contains("下雨天可以去哪？", "大溪雨天旅遊", 1)
 
     def test_half_day_route(self) -> None:
-        self.assert_top_contains("第一次去大溪怎麼排半日遊？", "建議遊覽路線", 1)
+        self.assert_top_contains("第一次去大溪怎麼排半日遊？", "大溪半日遊", 2)
 
     def test_unknown_question(self) -> None:
         self.assertEqual(app.retrieve("火星基地在哪裡？"), [])
@@ -498,6 +498,54 @@ class ExternalKnowledgeFallbackTests(unittest.IsolatedAsyncioTestCase):
         resolved, focus = app.resolve_question("再詳細一點", [], [], ["萬家老街豬腳"])
         hits = app.retrieve(resolved, focus_entities=focus)
         self.assertFalse(app.should_use_web("再詳細一點", hits, resolved))
+
+
+class V18PracticalAndRouteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        app.build_search_index()
+
+    def test_traffic_returns_useful_info_immediately(self) -> None:
+        resolved, focus = app.resolve_question("交通", [], [])
+        self.assertEqual(focus, ["大溪交通"])
+        hits = app.retrieve(resolved, focus_entities=focus)
+        answer = app.local_rag_answer("交通", hits)
+        self.assertIn("自行開車", answer)
+        self.assertIn("大眾運輸", answer)
+        self.assertIn("到達後怎麼走", answer)
+        self.assertNotIn("再詳細一點", answer)
+
+    def test_parking_returns_parking_details_immediately(self) -> None:
+        resolved, focus = app.resolve_question("停車", [], [])
+        self.assertEqual(focus, ["大溪停車"])
+        hits = app.retrieve(resolved, focus_entities=focus)
+        answer = app.local_rag_answer("停車", hits)
+        self.assertIn("月眉停車場", answer)
+        self.assertIn("大溪橋頭停車場", answer)
+        self.assertNotIn("再詳細一點", answer)
+
+    def test_generic_one_day_route_uses_kb_template(self) -> None:
+        question = "幫我安排大溪老街一日遊"
+        resolved, focus = app.resolve_question(question, [], [])
+        self.assertEqual(focus, ["大溪一日遊"])
+        hits = app.retrieve(resolved, focus_entities=focus)
+        answer = app.local_rag_answer(question, hits)
+        self.assertIn("大溪老街", answer)
+        self.assertIn("福仁宮", answer)
+        self.assertIn("木藝生態博物館", answer)
+        self.assertIn("大溪橋", answer)
+        self.assertNotEqual(answer.count("\n1."), 0)
+
+    def test_attraction_detail_followup_expands_answer(self) -> None:
+        resolved, focus = app.resolve_question("武德殿", [], [])
+        hits = app.retrieve(resolved, focus_entities=focus)
+        short = app.local_rag_answer("武德殿", hits)
+        resolved2, focus2 = app.resolve_question("再詳細一點", [], [], ["武德殿"])
+        hits2 = app.retrieve(resolved2, focus_entities=focus2)
+        detailed = app.local_rag_answer("再詳細一點", hits2)
+        self.assertGreater(len(detailed), len(short))
+        self.assertIn("建築與歷史特色", detailed)
+        self.assertIn("地址與開放資訊", detailed)
 
 
 if __name__ == "__main__":
